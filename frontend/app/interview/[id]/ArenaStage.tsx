@@ -8,8 +8,6 @@ import {
   LogOut,
   ShieldAlert,
   X,
-  Mic,
-  MicOff,
   Send,
   Volume2,
   Video,
@@ -128,7 +126,7 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
   const [interviewState, setInterviewState] = useState<string>("");
   const [videoSrc, setVideoSrc] = useState<string>("");
   const [isCompleted, setIsCompleted] = useState<boolean>(false);
-  const [isMicMuted, setIsMicMuted] = useState<boolean>(false); // start active by default
+  const [isMicMuted, setIsMicMuted] = useState<boolean>(true); // GEÇİCİ TEST: mikrofon izni istemeden metinle test edebilmek için varsayılan kapalı
 
   // ── Refs ──
   const wsRef = useRef<WebSocket | null>(null);
@@ -1094,18 +1092,29 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
             Transkript
           </button>
 
-          {/* User volume visualizer */}
-          <div className="flex h-[38px] flex-1 items-center rounded-lg border border-white/[0.04] bg-white/[0.01] px-4 max-w-sm">
-            <div className="flex items-center gap-3 w-full">
-              <Mic className="h-4 w-4 text-white/30" />
-              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/[0.05]">
-                <div
-                  ref={userVolumeBarRef}
-                  className="h-full bg-gradient-to-r from-theme-1 to-theme-2 transition-all duration-75"
-                  style={{ width: "0%" }}
-                />
-              </div>
-            </div>
+          {/* GEÇİCİ TEST: metinle cevap girişi (ses yerine) */}
+          <div className="flex h-[38px] flex-1 items-center gap-2 rounded-lg border border-white/[0.04] bg-white/[0.01] px-3 max-w-sm">
+            <input
+              type="text"
+              value={textInput}
+              onChange={(e) => setTextInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  sendText();
+                }
+              }}
+              placeholder="Cevabını yaz ve Enter'a bas..."
+              className="w-full bg-transparent text-sm text-white placeholder:text-white/20 focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={sendText}
+              disabled={!textInput.trim()}
+              className="shrink-0 rounded-md p-1.5 text-theme-1/70 transition-colors hover:bg-theme-1/10 hover:text-theme-1 disabled:opacity-30 disabled:hover:bg-transparent"
+            >
+              <Send className="h-4 w-4" />
+            </button>
           </div>
         </div>
 
