@@ -133,11 +133,6 @@ export default function InterviewPage({ params }: { params: Promise<{ id: string
   // ── Keyboard controls (demo) ──
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
-      // Bu demo kısayolları sadece "arena" (gerçek mülakat) aşamasına geçmeden
-      // önce anlamlıdır. Aksi halde Space tuşu, ArenaStage'deki metin girişinde
-      // boşluk karakterinin yazılmasını global olarak engelliyordu.
-      if (stage === "arena") return;
-
       if (e.code === "Space") {
         e.preventDefault();
         setAiState((prev) => {
@@ -155,7 +150,7 @@ export default function InterviewPage({ params }: { params: Promise<{ id: string
         }, 3000);
       }
     },
-    [stage]
+    []
   );
 
   useEffect(() => {
