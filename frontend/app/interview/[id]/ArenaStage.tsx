@@ -9,10 +9,7 @@ import {
   ShieldAlert,
   X,
   Mic,
-  MicOff,
-  Send,
   Volume2,
-  Video,
   UserCircle,
 } from "lucide-react";
 
@@ -27,9 +24,8 @@ interface TranscriptEntry {
   text: string;
 }
 
-interface MediaChunk {
+interface AudioChunkItem {
   index: number;
-  type: "video" | "audio";
   url: string;
 }
 
@@ -126,18 +122,21 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
   const [currentAiText, setCurrentAiText] = useState<string>("");
   const [textInput, setTextInput] = useState<string>("");
   const [interviewState, setInterviewState] = useState<string>("");
-  const [videoSrc, setVideoSrc] = useState<string>("");
+  const [isAiSpeaking, setIsAiSpeaking] = useState<boolean>(false);
   const [isCompleted, setIsCompleted] = useState<boolean>(false);
-  const [isMicMuted, setIsMicMuted] = useState<boolean>(false); // start active by default
+  const [isMicMuted, setIsMicMuted] = useState<boolean>(false);
 
   // ── Refs ──
   const wsRef = useRef<WebSocket | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const proctorTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const mediaQueueRef = useRef<MediaChunk[]>([]);
+  // Audio queue — ordered list of TTS chunks waiting to be played
+  const audioQueueRef = useRef<AudioChunkItem[]>([]);
   const isPlayingRef = useRef<boolean>(false);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  // The two always-looping avatar videos
+  const speakingVideoRef = useRef<HTMLVideoElement | null>(null);
+  const listeningVideoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   const transcriptsRef = useRef<Record<number, string>>({});
@@ -169,13 +168,15 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
     };
   }, []);
 
-  // ── Media Queue Player ──
+  // ── Audio Queue Player ──
+  // Plays TTS audio chunks in order. Drives isAiSpeaking state via native
+  // audio events — no timers, no polling. Avatar video switches instantly.
   const playNextInQueue = useCallback(() => {
-    if (isPlayingRef.current || mediaQueueRef.current.length === 0) return;
+    if (isPlayingRef.current || audioQueueRef.current.length === 0) return;
 
-    // Sıraya göre sırala
-    mediaQueueRef.current.sort((a, b) => a.index - b.index);
-    const next = mediaQueueRef.current.shift();
+    // Play in original sentence order
+    audioQueueRef.current.sort((a, b) => a.index - b.index);
+    const next = audioQueueRef.current.shift();
     if (!next) return;
 
     isPlayingRef.current = true;
@@ -187,45 +188,54 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
       setCurrentAiText("");
     }
 
-    if (next.type === "video" && videoRef.current) {
-      setVideoSrc(next.url);
-      videoRef.current.src = next.url;
-      videoRef.current.onended = () => {
-        isPlayingRef.current = false;
-        if (mediaQueueRef.current.length === 0) {
-          setAiState("listening");
-        }
-        playNextInQueue();
-      };
-      videoRef.current.onerror = () => {
-        isPlayingRef.current = false;
-        playNextInQueue();
-      };
-      videoRef.current.play().catch(() => {
-        isPlayingRef.current = false;
-        playNextInQueue();
-      });
-    } else if (audioRef.current) {
-      audioRef.current.src = next.url;
-      audioRef.current.onended = () => {
-        isPlayingRef.current = false;
-        if (mediaQueueRef.current.length === 0) {
-          setAiState("listening");
-        }
-        playNextInQueue();
-      };
-      audioRef.current.onerror = () => {
-        isPlayingRef.current = false;
-        playNextInQueue();
-      };
-      audioRef.current.play().catch(() => {
-        isPlayingRef.current = false;
-        playNextInQueue();
-      });
-    } else {
+    if (!audioRef.current) {
       isPlayingRef.current = false;
+      return;
     }
+
+    const audio = audioRef.current;
+    audio.src = `http://localhost:8000${next.url}`;
+
+    audio.onplay = () => {
+      // Avatar instantly switches to speaking.mp4
+      setIsAiSpeaking(true);
+    };
+
+    audio.onended = () => {
+      isPlayingRef.current = false;
+      if (audioQueueRef.current.length === 0) {
+        // No more queued sentences — switch back to listening.mp4
+        setIsAiSpeaking(false);
+        setAiState("listening");
+      }
+      playNextInQueue();
+    };
+
+    audio.onerror = () => {
+      isPlayingRef.current = false;
+      setIsAiSpeaking(false);
+      playNextInQueue();
+    };
+
+    audio.play().catch(() => {
+      isPlayingRef.current = false;
+      setIsAiSpeaking(false);
+      playNextInQueue();
+    });
   }, []);
+
+  // ── Ensure both avatar videos loop from the start ──
+  useEffect(() => {
+    const startVideo = (el: HTMLVideoElement | null) => {
+      if (!el) return;
+      el.loop = true;
+      el.muted = true;
+      el.playsInline = true;
+      el.play().catch(() => {/* autoplay blocked; will play on first user gesture */});
+    };
+    startVideo(speakingVideoRef.current);
+    startVideo(listeningVideoRef.current);
+  }, [interviewStarted]);
 
   // ── WebSocket Connection ──
   const connectWebSocket = useCallback(() => {
@@ -283,28 +293,21 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
             break;
 
           case "tts_ready":
-            mediaQueueRef.current.push({
+            // Queue the audio chunk. isAiSpeaking is driven by native audio events.
+            audioQueueRef.current.push({
               index: msg.index,
-              type: "audio",
               url: msg.url,
             });
             playNextInQueue();
             break;
 
-          case "video_ready":
-            mediaQueueRef.current = mediaQueueRef.current.filter(
-              (item) => !(item.index === msg.index && item.type === "audio")
-            );
-            mediaQueueRef.current.push({
-              index: msg.index,
-              type: "video",
-              url: msg.url,
-            });
-            playNextInQueue();
-            break;
-
-          case "audio_only":
-            playNextInQueue();
+          case "tts_done":
+            // Server confirms all TTS tasks for this turn are queued.
+            // If the local audio queue is already empty (all played), revert avatar.
+            if (audioQueueRef.current.length === 0 && !isPlayingRef.current) {
+              setIsAiSpeaking(false);
+              setAiState("listening");
+            }
             break;
 
           case "scorecard":
@@ -313,6 +316,7 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
 
           case "completed":
             setIsCompleted(true);
+            setIsAiSpeaking(false);
             setAiState("idle");
             break;
 
@@ -369,15 +373,12 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
   // ── Trigger Speech Interrupt ──
   const triggerInterrupt = useCallback(() => {
     console.log("[Interrupt] AI interrupted by voice activity");
-    if (videoRef.current) {
-      videoRef.current.pause();
-    }
     if (audioRef.current) {
       audioRef.current.pause();
     }
     isPlayingRef.current = false;
-    mediaQueueRef.current = [];
-    setVideoSrc("");
+    audioQueueRef.current = [];
+    setIsAiSpeaking(false);
 
     // Stop current recording chunk to discard it (since it has AI speech/background noise)
     ignoreNextAudioRef.current = true;
@@ -619,15 +620,12 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
   // ── Manual Interrupt Control ──
   const handleManualInterrupt = useCallback(() => {
     console.log("[Interrupt] AI manually interrupted");
-    if (videoRef.current) {
-      videoRef.current.pause();
-    }
     if (audioRef.current) {
       audioRef.current.pause();
     }
     isPlayingRef.current = false;
-    mediaQueueRef.current = [];
-    setVideoSrc("");
+    audioQueueRef.current = [];
+    setIsAiSpeaking(false);
 
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
       ignoreNextAudioRef.current = true;
@@ -797,7 +795,7 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
      ═══════════════════════════════════════════════════ */
   return (
     <div className="relative flex h-screen flex-col overflow-hidden bg-[#030306]">
-      {/* Hidden media elements */}
+      {/* Hidden audio element for TTS playback */}
       <audio ref={audioRef} className="hidden" />
 
       {/* Ambient background glow */}
@@ -944,27 +942,42 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
               }}
               key={`orb-${aiState}`}
             >
-              {/* AI Avatar Video (Lip-Sync) */}
+              {/*
+                DUAL-VIDEO AVATAR — Both videos are always in the DOM and looping.
+                CSS opacity/pointer-events toggle achieves zero-latency switching
+                with no black frames or reloads.
+              */}
+
+              {/* Speaking video — visible when AI is producing audio */}
               <video
-                ref={videoRef}
+                ref={speakingVideoRef}
+                src="/speaking.mp4"
+                loop
+                muted
+                autoPlay
                 playsInline
-                className={`absolute inset-0 h-full w-full object-cover rounded-full ${
-                  videoSrc && aiState === "speaking" ? "block" : "hidden"
-                }`}
+                className="absolute inset-0 h-full w-full object-cover rounded-full transition-opacity duration-150"
+                style={{
+                  opacity: isAiSpeaking ? 1 : 0,
+                  pointerEvents: "none",
+                  willChange: "opacity",
+                }}
               />
 
-              {/* Static Avatar Image Fallback */}
-              <img
-                src={`/static/avatar_${voiceGender}.png`}
-                alt="AI Avatar"
-                className={`absolute inset-0 h-full w-full object-cover rounded-full ${
-                  videoSrc && aiState === "speaking" ? "hidden" : "block"
-                }`}
+              {/* Listening video — visible when AI is idle/listening/thinking */}
+              <video
+                ref={listeningVideoRef}
+                src="/listening.mp4"
+                loop
+                muted
+                autoPlay
+                playsInline
+                className="absolute inset-0 h-full w-full object-cover rounded-full transition-opacity duration-150"
                 style={{
-                  filter:
-                    aiState === "thinking"
-                      ? "brightness(0.7) saturate(0.8)"
-                      : "brightness(0.9)",
+                  opacity: isAiSpeaking ? 0 : 1,
+                  filter: aiState === "thinking" ? "brightness(0.7) saturate(0.8)" : "brightness(0.9)",
+                  pointerEvents: "none",
+                  willChange: "opacity",
                 }}
               />
 

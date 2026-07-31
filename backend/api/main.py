@@ -1,11 +1,12 @@
 """
 BlindHire Backend API — FastAPI + WebSocket + Paralel Pipeline
 
-Bu modül tüm servisleri (TTS, ASR, LipSync, LLM Orkestratör) birleştirir
-ve frontend ile WebSocket üzerinden gerçek zamanlı iletişim sağlar.
+Bu modül TTS, ASR ve LLM Orkestratörü birleştirir.
+Avatar senkronizasyonu artık frontend'de yerel video döngüsü ile yapılır.
+LipSync (Wav2Lip) tamamen kaldırılmıştır.
 
-Paralel Pipeline Mimarisi:
-    LLM stream → cümle tamamlanır → asyncio.create_task(TTS → LipSync) → WS'e gönder
+Pipeline:
+    LLM stream → cümle tamamlanır → asyncio.create_task(TTS) → WS'e gönder
     Her cümle bağımsız bir async görev olarak işlenir, frontend sıraya alıp oynatır.
 
 Çalıştırma:
@@ -43,7 +44,6 @@ if _ai_agent_path not in sys.path:
 
 from tts_service import TTSService
 from asr_service import ASRService
-from lipsync_service import LipSyncService
 
 # Logging yapılandırması
 logging.basicConfig(
@@ -58,13 +58,12 @@ logger = logging.getLogger("blindhire.api")
 # ──────────────────────────────────────────────
 tts_service: Optional[TTSService] = None
 asr_service: Optional[ASRService] = None
-lipsync_service: Optional[LipSyncService] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Uygulama başlangıcında servisleri ilklendirir."""
-    global tts_service, asr_service, lipsync_service
+    global tts_service, asr_service
 
     logger.info("=" * 60)
     logger.info("BlindHire Backend API başlatılıyor...")
@@ -81,10 +80,6 @@ async def lifespan(app: FastAPI):
     except ValueError as e:
         logger.warning(f"[ASR] Servis başlatılamadı: {e}")
         asr_service = None
-
-    # LipSync servisi
-    lipsync_service = LipSyncService()
-    logger.info("[LipSync] Wav2Lip servisi hazır.")
 
     # Karşılama cümlelerini önceden sentezle (prerender)
     logger.info("[Prerender] Sık kullanılan kalıp cümleler sentezleniyor...")
@@ -123,8 +118,8 @@ async def lifespan(app: FastAPI):
 # ──────────────────────────────────────────────
 app = FastAPI(
     title="BlindHire Backend API",
-    description="Otonom AI Mülakat Sistemi — TTS, ASR, Lip-Sync, LLM Orkestrasyon",
-    version="2.0.0",
+    description="Otonom AI Mülakat Sistemi — TTS, ASR, LLM Orkestrasyon",
+    version="3.0.0",
     lifespan=lifespan,
 )
 
@@ -137,7 +132,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Statik dosyalar (avatar, cache, video)
+# Statik dosyalar (tts cache)
 static_dir = Path(__file__).parent / "static"
 static_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
@@ -153,7 +148,6 @@ async def health_check():
         "services": {
             "tts": tts_service is not None,
             "asr": asr_service is not None,
-            "lipsync": lipsync_service is not None,
         },
     }
 
@@ -170,15 +164,18 @@ async def websocket_interview(ws: WebSocket):
         {"type": "start", "voice": "male"|"female"}      → Mülakatı başlat
         {"type": "audio", "data": "<base64>"}             → Aday ses kaydı
         {"type": "text", "data": "aday metni"}            → Aday metin girişi (fallback)
-        {"type": "interrupt", "data": "<base64>",          → Söz kesme
-         "unfinished": "yarım kalan metin"}
 
     Backend → Frontend mesaj formatları:
         {"type": "state", "state": "WELCOME"}             → Mülakat durumu
-        {"type": "transcript", "text": "..."}             → AI yanıt metni (cümle bazlı)
-        {"type": "tts_ready", "url": "/static/...mp3"}    → TTS ses dosyası hazır
-        {"type": "video_ready", "url": "/static/...mp4"}  → Lip-sync video hazır
-        {"type": "audio_only", "url": "/static/...mp3"}   → Fallback: sadece ses
+        {"type": "transcript", "text": "...", "index": N} → AI yanıt metni (cümle bazlı)
+        {"type": "tts_ready",
+         "url": "/static/...mp3",
+         "index": N,
+         "isAiSpeaking": true}                            → TTS ses dosyası hazır, avatar konuşuyor
+        {"type": "tts_done",
+         "index": N,
+         "isAiSpeaking": false}                           → Bu yanıt turundaki son cümle bitti
+        {"type": "user_transcript", "text": "..."}        → Adayın konuşması metne çevrildi
         {"type": "thinking"}                              → AI düşünüyor
         {"type": "scorecard", "data": {...}}               → Mülakat skor kartı
         {"type": "error", "message": "..."}               → Hata mesajı
@@ -189,7 +186,6 @@ async def websocket_interview(ws: WebSocket):
 
     orchestrator = None
     voice_preference = "male"
-    sentence_queue: asyncio.Queue = asyncio.Queue()
 
     try:
         while True:
@@ -223,7 +219,7 @@ async def websocket_interview(ws: WebSocket):
                 await ws.send_json({"type": "state", "state": orchestrator.current_state.value})
                 await ws.send_json({"type": "thinking"})
 
-                # Karşılama mesajını stream et ve paralel pipeline'a gönder
+                # Karşılama mesajını stream et ve TTS pipeline'a gönder
                 await _stream_and_pipeline(
                     ws=ws,
                     orchestrator=orchestrator,
@@ -276,7 +272,7 @@ async def websocket_interview(ws: WebSocket):
                 # Durum bilgisi
                 await ws.send_json({"type": "state", "state": orchestrator.current_state.value})
 
-                # Orkestratöre gönder ve paralel pipeline'ı başlat
+                # Orkestratöre gönder ve pipeline'ı başlat
                 interrupted = msg.get("interrupted", False)
                 unfinished = msg.get("unfinished", "")
 
@@ -349,7 +345,7 @@ async def websocket_interview(ws: WebSocket):
 
 
 # ──────────────────────────────────────────────
-#  Paralel Pipeline: LLM Stream → TTS → LipSync
+#  Paralel Pipeline: LLM Stream → TTS
 # ──────────────────────────────────────────────
 async def _stream_and_pipeline(
     ws: WebSocket,
@@ -361,10 +357,11 @@ async def _stream_and_pipeline(
 ):
     """
     Orkestratörden gelen yanıtı cümle bazlı stream eder,
-    her cümle için paralel olarak TTS ve LipSync görevleri başlatır.
+    her cümle için paralel TTS görevi başlatır.
+    Avatar senkronizasyonu isAiSpeaking flag'i ile frontend tarafından yönetilir.
 
     Pipeline:
-        LLM token stream → cümle biriktir → [TTS → LipSync] async task → WS'e gönder
+        LLM token stream → cümle biriktir → TTS async task → WS'e gönder
     """
     import re
 
@@ -403,7 +400,7 @@ async def _stream_and_pipeline(
                         "index": sentence_index,
                     })
 
-                    # Paralel TTS + LipSync görevini başlat
+                    # Paralel TTS görevini başlat
                     task = asyncio.create_task(
                         _process_sentence(
                             ws=ws,
@@ -437,6 +434,14 @@ async def _stream_and_pipeline(
         if pending_tasks:
             await asyncio.gather(*pending_tasks, return_exceptions=True)
 
+        # Bu tur bitti — avatar dinleme moduna geçiyor
+        # Frontend'in audio.onended event'i zaten bunu tetikler;
+        # bu mesaj ise ek bir güvence katmanıdır.
+        await ws.send_json({
+            "type": "tts_done",
+            "isAiSpeaking": False,
+        })
+
         # Yeni durum bilgisi gönder
         await ws.send_json({"type": "state", "state": orchestrator.current_state.value})
 
@@ -457,15 +462,14 @@ async def _process_sentence(
     voice: str,
 ):
     """
-    Tek bir cümle için TTS → LipSync pipeline'ını çalıştırır.
+    Tek bir cümle için TTS pipeline'ını çalıştırır.
     
     1. edge-tts ile ses sentezlenir
-    2. Wav2Lip ile lip-sync video üretilir
-    3. Sonuç WebSocket üzerinden frontend'e gönderilir
+    2. TTS hazır olduğunda isAiSpeaking=true ile birlikte frontend'e gönderilir
+       → Frontend bu flag'i alınca speaking.mp4 döngüsüne geçer
     """
     start_time = time.time()
 
-    # ── Adım 1: TTS ──
     try:
         audio_path = await tts_service.synthesize(sentence, voice=voice)
         audio_url = tts_service.get_relative_url(audio_path)
@@ -480,45 +484,13 @@ async def _process_sentence(
         })
         return
 
-    # TTS hazır — frontend'e ses URL'sini gönder (video gelmese bile ses çalabilsin)
+    # TTS hazır — avatar konuşuyor sinyali ile birlikte gönder
     await ws.send_json({
         "type": "tts_ready",
         "url": audio_url,
         "index": index,
+        "isAiSpeaking": True,
     })
-
-    # ── Adım 2: Lip-Sync ──
-    try:
-        video_path = await lipsync_service.generate(
-            audio_path=audio_path,
-            gender=voice,
-        )
-        lipsync_duration = time.time() - start_time - tts_duration
-
-        if video_path:
-            video_url = lipsync_service.get_relative_url(video_path)
-            logger.info(f"[LipSync] Cümle #{index} video üretildi ({lipsync_duration:.2f}sn)")
-            await ws.send_json({
-                "type": "video_ready",
-                "url": video_url,
-                "index": index,
-            })
-        else:
-            # Fallback: audio-only mod
-            logger.info(f"[LipSync] Cümle #{index} fallback — audio-only mod.")
-            await ws.send_json({
-                "type": "audio_only",
-                "url": audio_url,
-                "index": index,
-            })
-
-    except Exception as e:
-        logger.warning(f"[LipSync] Cümle #{index} lip-sync hatası: {e} — audio-only moda geçiliyor.")
-        await ws.send_json({
-            "type": "audio_only",
-            "url": audio_url,
-            "index": index,
-        })
 
 
 # ──────────────────────────────────────────────
