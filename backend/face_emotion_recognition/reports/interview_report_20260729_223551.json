@@ -1,0 +1,16 @@
+{
+  "duration_seconds": 33.6,
+  "violation_count": 1,
+  "violations": [
+    {
+      "type": "looked_away",
+      "at": 18.74211072921753,
+      "duration": 10.090859413146973
+    }
+  ],
+  "emotion_distribution": {
+    "Neutral": 224,
+    "Sadness": 52
+  },
+  "dominant_emotion": "Neutral"
+}
