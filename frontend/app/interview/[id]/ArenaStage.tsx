@@ -8,8 +8,6 @@ import {
   LogOut,
   ShieldAlert,
   X,
-  Mic,
-  MicOff,
   Send,
   Volume2,
   Video,
@@ -128,7 +126,9 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
   const [interviewState, setInterviewState] = useState<string>("");
   const [videoSrc, setVideoSrc] = useState<string>("");
   const [isCompleted, setIsCompleted] = useState<boolean>(false);
-  const [isMicMuted, setIsMicMuted] = useState<boolean>(false); // start active by default
+  const [isMicMuted, setIsMicMuted] = useState<boolean>(true); // GEÇİCİ TEST: mikrofon izni istemeden metinle test edebilmek için varsayılan kapalı
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const errorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Refs ──
   const wsRef = useRef<WebSocket | null>(null);
@@ -146,6 +146,7 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
+  const micStartingRef = useRef<boolean>(false);
   const ignoreNextAudioRef = useRef<boolean>(false);
 
   // ── Countdown timer ──
@@ -317,7 +318,15 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
             break;
 
           case "error":
+            // Hata metni ASLA modelin ağzından çıkmış gibi sesli okunmaz/transkripte
+            // yazılmaz — sadece burada, kısa ömürlü görsel bir uyarı olarak gösterilir.
+            // "Düşünüyor" durumunda sonsuza kadar takılı kalmayı önlemek için aiState
+            // sıfırlanır.
             console.error("[WS Error]", msg.message);
+            setAiState("listening");
+            setErrorMessage("Bir bağlantı sorunu oluştu, lütfen tekrar dener misin?");
+            if (errorTimeoutRef.current) clearTimeout(errorTimeoutRef.current);
+            errorTimeoutRef.current = setTimeout(() => setErrorMessage(null), 6000);
             break;
         }
       } catch {
@@ -351,6 +360,9 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
 
   // ── Stop Mic Monitoring ──
   const stopMicMonitoring = useCallback(() => {
+    // Eğer bir başlatma işlemi devam ediyorsa (getUserMedia beklemede), onu iptal
+    // olarak işaretle — başlatma tamamlandığında akışı hemen kapatıp sızıntıyı önler.
+    micStartingRef.current = false;
     if (micStreamRef.current) {
       micStreamRef.current.getTracks().forEach((track) => track.stop());
       micStreamRef.current = null;
@@ -408,11 +420,24 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
 
   // ── Start Mic Monitoring with Web Audio VAD ──
   const startMicMonitoring = useCallback(async () => {
+    // getUserMedia asenkron olduğu için, yalnızca micStreamRef.current kontrolü
+    // yeterli değil: bu fonksiyon üst üste (örn. React StrictMode'un dev modunda
+    // efektleri iki kez çalıştırması nedeniyle) çağrılırsa, ilk çağrı henüz
+    // getUserMedia'dan dönmeden ikinci çağrı da guard'ı geçip ikinci bir mikrofon
+    // akışı açabilir ve ilki hiç kapatılmadan sızabilir. Senkron bir "başlatılıyor"
+    // bayrağı bunu engeller.
+    if (micStreamRef.current || micStartingRef.current) return;
+    micStartingRef.current = true;
     try {
-      if (micStreamRef.current) return;
-
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!micStartingRef.current) {
+        // Bu bekleme sırasında stopMicMonitoring çağrılmış (örn. StrictMode
+        // cleanup'ı) — yeni açılan akışı hemen kapatıp sızıntıyı önle.
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
       micStreamRef.current = stream;
+      micStartingRef.current = false;
 
       const mediaRecorder = new MediaRecorder(stream, {
         mimeType: "audio/webm;codecs=opus",
@@ -542,6 +567,7 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
       requestAnimationFrame(checkVolume);
     } catch (err) {
       console.error("Mikrofon izleme hatası:", err);
+      micStartingRef.current = false;
       setIsMicMuted(true);
     }
   }, [isMicMuted, aiState, triggerInterrupt]);
@@ -557,6 +583,29 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
       stopMicMonitoring();
     };
   }, [interviewStarted, isMicMuted, startMicMonitoring, stopMicMonitoring]);
+
+  // ── Effect: Sıralı Diyalog — BlindHire konuşurken/düşünürken mikrofonu FİİLEN
+  // duraklat ── Ses seviyesi kontrolü (checkVolume) zaten AI konuşurken algılamayı
+  // yok sayıyordu, ama bu ek katman kaydın kendisini durdurarak hiçbir ses
+  // parçasının yakalanmamasını/gönderilmemesini garanti eder. Aday sırası
+  // geldiğinde (aiState === "listening") kayıt otomatik devam eder.
+  useEffect(() => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder) return;
+
+    if (aiState === "speaking" || aiState === "thinking") {
+      if (recorder.state === "recording") {
+        recorder.pause();
+      }
+    } else if (aiState === "listening") {
+      if (recorder.state === "paused") {
+        // Duraklatma sırasında biriken (AI'nin kendi sesinden sızmış olabilecek)
+        // ses parçalarını at, adayın gerçek konuşması temiz bir şekilde başlasın.
+        audioChunksRef.current = [];
+        recorder.resume();
+      }
+    }
+  }, [aiState]);
 
   // ── Push-to-Talk Controls (when Mic is Muted) ──
   const startRecording = useCallback(async () => {
@@ -655,7 +704,11 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
   }, [currentAiText, isMicMuted, startRecording]);
 
   // ── Send Text (fallback) ──
+  // Sıralı (turn-based) diyalog: BlindHire konuşurken veya düşünürken aday söz
+  // alamaz — sadece "listening" durumundayken (AI konuşmasını bitirip sırayı
+  // adaya bıraktığında) mesaj gönderilebilir.
   const sendText = useCallback(() => {
+    if (aiState !== "listening") return;
     if (!textInput.trim() || !wsRef.current) return;
     if (wsRef.current.readyState !== WebSocket.OPEN) return;
 
@@ -668,13 +721,14 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
     ]);
     setTextInput("");
     setAiState("thinking");
-  }, [textInput]);
+  }, [textInput, aiState]);
 
   // ── Cleanup ──
   useEffect(() => {
     return () => {
       wsRef.current?.close();
       stopMicMonitoring();
+      if (errorTimeoutRef.current) clearTimeout(errorTimeoutRef.current);
     };
   }, [stopMicMonitoring]);
 
@@ -778,11 +832,9 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
             {/* Start Button */}
             <button
               type="button"
-              onClick={() => {
-                connectWebSocket();
-                setTimeout(() => startInterview(), 500);
-              }}
-              className="w-full rounded-xl bg-gradient-to-r from-theme-1 to-theme-2 text-black py-3 text-sm font-bold transition-all duration-300 hover:brightness-110 shadow-lg shadow-theme-1/20"
+              disabled={interviewStarted}
+              onClick={startInterview}
+              className="w-full rounded-xl bg-gradient-to-r from-theme-1 to-theme-2 text-black py-3 text-sm font-bold transition-all duration-300 hover:brightness-110 shadow-lg shadow-theme-1/20 disabled:opacity-50 disabled:pointer-events-none"
             >
               Mülakatı Başlat
             </button>
@@ -1055,6 +1107,22 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
             </motion.p>
           </AnimatePresence>
 
+          {/* Hata bildirimi: sadece görsel, asla sesli okunmaz */}
+          <AnimatePresence>
+            {errorMessage && (
+              <motion.div
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                className="rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-2"
+              >
+                <p className="text-center text-xs font-medium text-red-400">
+                  {errorMessage}
+                </p>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           {/* Current AI text and Interrupt button */}
           <AnimatePresence>
             {showTranscript && aiState === "speaking" && currentAiText && (
@@ -1094,18 +1162,36 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
             Transkript
           </button>
 
-          {/* User volume visualizer */}
-          <div className="flex h-[38px] flex-1 items-center rounded-lg border border-white/[0.04] bg-white/[0.01] px-4 max-w-sm">
-            <div className="flex items-center gap-3 w-full">
-              <Mic className="h-4 w-4 text-white/30" />
-              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/[0.05]">
-                <div
-                  ref={userVolumeBarRef}
-                  className="h-full bg-gradient-to-r from-theme-1 to-theme-2 transition-all duration-75"
-                  style={{ width: "0%" }}
-                />
-              </div>
-            </div>
+          {/* GEÇİCİ TEST: metinle cevap girişi (ses yerine) */}
+          {/* Sıralı diyalog: BlindHire konuşurken/düşünürken input kilitli — aday sırası
+              gelene (aiState === "listening") kadar yazamaz, araya giremez. */}
+          <div className="flex h-[38px] flex-1 items-center gap-2 rounded-lg border border-white/[0.04] bg-white/[0.01] px-3 max-w-sm">
+            <input
+              type="text"
+              value={textInput}
+              onChange={(e) => setTextInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  sendText();
+                }
+              }}
+              disabled={aiState !== "listening"}
+              placeholder={
+                aiState === "listening"
+                  ? "Cevabını yaz ve Enter'a bas..."
+                  : "BlindHire konuşuyor, sıranı bekle..."
+              }
+              className="w-full bg-transparent text-sm text-white placeholder:text-white/20 focus:outline-none disabled:cursor-not-allowed"
+            />
+            <button
+              type="button"
+              onClick={sendText}
+              disabled={!textInput.trim() || aiState !== "listening"}
+              className="shrink-0 rounded-md p-1.5 text-theme-1/70 transition-colors hover:bg-theme-1/10 hover:text-theme-1 disabled:opacity-30 disabled:hover:bg-transparent"
+            >
+              <Send className="h-4 w-4" />
+            </button>
           </div>
         </div>
 
