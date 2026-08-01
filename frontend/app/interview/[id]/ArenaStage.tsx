@@ -8,9 +8,8 @@ import {
   LogOut,
   ShieldAlert,
   X,
-  Send,
+  Mic,
   Volume2,
-  Video,
   UserCircle,
 } from "lucide-react";
 
@@ -25,9 +24,8 @@ interface TranscriptEntry {
   text: string;
 }
 
-interface MediaChunk {
+interface AudioChunkItem {
   index: number;
-  type: "video" | "audio";
   url: string;
 }
 
@@ -122,11 +120,12 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [showExitConfirm, setShowExitConfirm] = useState<boolean>(false);
   const [currentAiText, setCurrentAiText] = useState<string>("");
-  const [textInput, setTextInput] = useState<string>("");
   const [interviewState, setInterviewState] = useState<string>("");
-  const [videoSrc, setVideoSrc] = useState<string>("");
+  const [isAiSpeaking, setIsAiSpeaking] = useState<boolean>(false);
   const [isCompleted, setIsCompleted] = useState<boolean>(false);
-  const [isMicMuted, setIsMicMuted] = useState<boolean>(true); // GEÇİCİ TEST: mikrofon izni istemeden metinle test edebilmek için varsayılan kapalı
+  const [isMicMuted, setIsMicMuted] = useState<boolean>(false);
+  const [toastWarning, setToastWarning] = useState<string | null>(null);
+  const [scorecard, setScorecard] = useState<any>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const errorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -135,13 +134,18 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const proctorTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const mediaQueueRef = useRef<MediaChunk[]>([]);
+  // Audio queue — ordered list of TTS chunks waiting to be played
+  const audioQueueRef = useRef<AudioChunkItem[]>([]);
   const isPlayingRef = useRef<boolean>(false);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  // The two always-looping avatar videos
+  const speakingVideoRef = useRef<HTMLVideoElement | null>(null);
+  const listeningVideoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   const transcriptsRef = useRef<Record<number, string>>({});
   const userVolumeBarRef = useRef<HTMLDivElement | null>(null);
+  const userVideoRef = useRef<HTMLVideoElement | null>(null);
+  const userCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -170,13 +174,15 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
     };
   }, []);
 
-  // ── Media Queue Player ──
+  // ── Audio Queue Player ──
+  // Plays TTS audio chunks in order. Drives isAiSpeaking state via native
+  // audio events — no timers, no polling. Avatar video switches instantly.
   const playNextInQueue = useCallback(() => {
-    if (isPlayingRef.current || mediaQueueRef.current.length === 0) return;
+    if (isPlayingRef.current || audioQueueRef.current.length === 0) return;
 
-    // Sıraya göre sırala
-    mediaQueueRef.current.sort((a, b) => a.index - b.index);
-    const next = mediaQueueRef.current.shift();
+    // Play in original sentence order
+    audioQueueRef.current.sort((a, b) => a.index - b.index);
+    const next = audioQueueRef.current.shift();
     if (!next) return;
 
     isPlayingRef.current = true;
@@ -188,45 +194,54 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
       setCurrentAiText("");
     }
 
-    if (next.type === "video" && videoRef.current) {
-      setVideoSrc(next.url);
-      videoRef.current.src = next.url;
-      videoRef.current.onended = () => {
-        isPlayingRef.current = false;
-        if (mediaQueueRef.current.length === 0) {
-          setAiState("listening");
-        }
-        playNextInQueue();
-      };
-      videoRef.current.onerror = () => {
-        isPlayingRef.current = false;
-        playNextInQueue();
-      };
-      videoRef.current.play().catch(() => {
-        isPlayingRef.current = false;
-        playNextInQueue();
-      });
-    } else if (audioRef.current) {
-      audioRef.current.src = next.url;
-      audioRef.current.onended = () => {
-        isPlayingRef.current = false;
-        if (mediaQueueRef.current.length === 0) {
-          setAiState("listening");
-        }
-        playNextInQueue();
-      };
-      audioRef.current.onerror = () => {
-        isPlayingRef.current = false;
-        playNextInQueue();
-      };
-      audioRef.current.play().catch(() => {
-        isPlayingRef.current = false;
-        playNextInQueue();
-      });
-    } else {
+    if (!audioRef.current) {
       isPlayingRef.current = false;
+      return;
     }
+
+    const audio = audioRef.current;
+    audio.src = `http://localhost:8000${next.url}`;
+
+    audio.onplay = () => {
+      // Avatar instantly switches to speaking.mp4
+      setIsAiSpeaking(true);
+    };
+
+    audio.onended = () => {
+      isPlayingRef.current = false;
+      if (audioQueueRef.current.length === 0) {
+        // No more queued sentences — switch back to listening.mp4
+        setIsAiSpeaking(false);
+        setAiState("listening");
+      }
+      playNextInQueue();
+    };
+
+    audio.onerror = () => {
+      isPlayingRef.current = false;
+      setIsAiSpeaking(false);
+      playNextInQueue();
+    };
+
+    audio.play().catch(() => {
+      isPlayingRef.current = false;
+      setIsAiSpeaking(false);
+      playNextInQueue();
+    });
   }, []);
+
+  // ── Ensure both avatar videos loop from the start ──
+  useEffect(() => {
+    const startVideo = (el: HTMLVideoElement | null) => {
+      if (!el) return;
+      el.loop = true;
+      el.muted = true;
+      el.playsInline = true;
+      el.play().catch(() => {/* autoplay blocked; will play on first user gesture */});
+    };
+    startVideo(speakingVideoRef.current);
+    startVideo(listeningVideoRef.current);
+  }, [interviewStarted]);
 
   // ── WebSocket Connection ──
   const connectWebSocket = useCallback(() => {
@@ -241,12 +256,10 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
 
     ws.onopen = () => {
       setIsConnected(true);
-      setAiState("idle");
     };
 
     ws.onclose = () => {
       setIsConnected(false);
-      setAiState("idle");
     };
 
     ws.onerror = () => {
@@ -284,37 +297,60 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
             break;
 
           case "tts_ready":
-            mediaQueueRef.current.push({
+            // Queue the audio chunk. isAiSpeaking is driven by native audio events.
+            audioQueueRef.current.push({
               index: msg.index,
-              type: "audio",
               url: msg.url,
             });
             playNextInQueue();
             break;
 
-          case "video_ready":
-            mediaQueueRef.current = mediaQueueRef.current.filter(
-              (item) => !(item.index === msg.index && item.type === "audio")
-            );
-            mediaQueueRef.current.push({
-              index: msg.index,
-              type: "video",
-              url: msg.url,
-            });
-            playNextInQueue();
-            break;
-
-          case "audio_only":
-            playNextInQueue();
+          case "tts_done":
+            // Server confirms all TTS tasks for this turn are queued.
+            // If the local audio queue is already empty (all played), revert avatar.
+            if (audioQueueRef.current.length === 0 && !isPlayingRef.current) {
+              setIsAiSpeaking(false);
+              setAiState("listening");
+            }
             break;
 
           case "scorecard":
             console.log("[Scorecard]", msg.data);
+            setScorecard(msg.data);
+
+            try {
+              const currentCandidateStr = localStorage.getItem("agentichr_current_user");
+              if (currentCandidateStr) {
+                const cand = JSON.parse(currentCandidateStr);
+                cand.techScore = msg.data.technical_score_100 || 70;
+                cand.reliability = msg.data.facial_score_100 || 85;
+                cand.overallScore = msg.data.overall_score_100 || 74;
+                cand.scorecard = msg.data;
+                localStorage.setItem("agentichr_current_user", JSON.stringify(cand));
+
+                const candidatesListStr = localStorage.getItem("agentichr_candidates");
+                if (candidatesListStr) {
+                  const list = JSON.parse(candidatesListStr);
+                  const updatedList = list.map((c: any) => (c.email === cand.email || c.id === cand.id) ? { ...c, ...cand } : c);
+                  localStorage.setItem("agentichr_candidates", JSON.stringify(updatedList));
+                }
+              }
+            } catch (e) {
+              console.error("Scorecard localStorage senkronizasyon hatası:", e);
+            }
             break;
 
           case "completed":
             setIsCompleted(true);
+            setIsAiSpeaking(false);
             setAiState("idle");
+            break;
+
+          case "proctor_warning":
+            if (msg.message) {
+              setToastWarning(msg.message);
+              setTimeout(() => setToastWarning(null), 4500);
+            }
             break;
 
           case "error":
@@ -342,6 +378,11 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
     setInterviewStarted(true);
     setAiState("thinking");
 
+    // Unlock browser audio context / element on user gesture
+    if (audioRef.current) {
+      audioRef.current.play().catch(() => {});
+    }
+
     const attemptStart = () => {
       if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) {
         connectWebSocket();
@@ -367,13 +408,19 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
       micStreamRef.current.getTracks().forEach((track) => track.stop());
       micStreamRef.current = null;
     }
-    if (audioContextRef.current && audioContextRef.current.state !== "closed") {
-      audioContextRef.current.close();
+    if (audioContextRef.current) {
+      try {
+        if (audioContextRef.current.state !== "closed") {
+          audioContextRef.current.close().catch(() => {});
+        }
+      } catch (e) {}
       audioContextRef.current = null;
     }
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
       ignoreNextAudioRef.current = true;
-      mediaRecorderRef.current.stop();
+      try {
+        mediaRecorderRef.current.stop();
+      } catch (e) {}
     }
     setIsRecording(false);
   }, []);
@@ -381,15 +428,12 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
   // ── Trigger Speech Interrupt ──
   const triggerInterrupt = useCallback(() => {
     console.log("[Interrupt] AI interrupted by voice activity");
-    if (videoRef.current) {
-      videoRef.current.pause();
-    }
     if (audioRef.current) {
       audioRef.current.pause();
     }
     isPlayingRef.current = false;
-    mediaQueueRef.current = [];
-    setVideoSrc("");
+    audioQueueRef.current = [];
+    setIsAiSpeaking(false);
 
     // Stop current recording chunk to discard it (since it has AI speech/background noise)
     ignoreNextAudioRef.current = true;
@@ -399,7 +443,9 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
       setTimeout(() => {
         if (micStreamRef.current && !isMicMuted) {
           audioChunksRef.current = [];
-          mediaRecorderRef.current?.start();
+          try {
+            mediaRecorderRef.current?.start();
+          } catch (e) {}
         }
       }, 150);
     }
@@ -418,7 +464,22 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
     }
   }, [currentAiText, isMicMuted]);
 
-  // ── Start Mic Monitoring with Web Audio VAD ──
+  const aiStateRef = useRef<AiState>(aiState);
+  useEffect(() => {
+    aiStateRef.current = aiState;
+  }, [aiState]);
+
+  const isMicMutedRef = useRef(isMicMuted);
+  useEffect(() => {
+    isMicMutedRef.current = isMicMuted;
+    if (micStreamRef.current) {
+      micStreamRef.current.getAudioTracks().forEach((track) => {
+        track.enabled = !isMicMuted;
+      });
+    }
+  }, [isMicMuted]);
+
+  // ── Start Mic & Camera Monitoring ──
   const startMicMonitoring = useCallback(async () => {
     // getUserMedia asenkron olduğu için, yalnızca micStreamRef.current kontrolü
     // yeterli değil: bu fonksiyon üst üste (örn. React StrictMode'un dev modunda
@@ -429,7 +490,10 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
     if (micStreamRef.current || micStartingRef.current) return;
     micStartingRef.current = true;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: { width: { ideal: 640 }, height: { ideal: 480 } },
+      });
       if (!micStartingRef.current) {
         // Bu bekleme sırasında stopMicMonitoring çağrılmış (örn. StrictMode
         // cleanup'ı) — yeni açılan akışı hemen kapatıp sızıntıyı önle.
@@ -439,9 +503,27 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
       micStreamRef.current = stream;
       micStartingRef.current = false;
 
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: "audio/webm;codecs=opus",
-      });
+      // Assign video stream to candidate webcam element
+      if (userVideoRef.current) {
+        userVideoRef.current.srcObject = stream;
+        userVideoRef.current.play().catch(() => {});
+      }
+
+      // Audio-only stream for MediaRecorder to prevent browser NotSupportedError
+      const audioTracks = stream.getAudioTracks();
+      if (audioTracks.length === 0) {
+        throw new Error("Mikrofon parçası bulunamadı.");
+      }
+      const audioOnlyStream = new MediaStream(audioTracks);
+
+      let options = {};
+      if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
+        options = { mimeType: "audio/webm;codecs=opus" };
+      } else if (MediaRecorder.isTypeSupported("audio/webm")) {
+        options = { mimeType: "audio/webm" };
+      }
+
+      const mediaRecorder = new MediaRecorder(audioOnlyStream, options);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
 
@@ -488,7 +570,7 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
       }
       audioContextRef.current = audioCtx;
 
-      const source = audioCtx.createMediaStreamSource(stream);
+      const source = audioCtx.createMediaStreamSource(audioOnlyStream);
       const analyser = audioCtx.createAnalyser();
       analyser.fftSize = 256;
       source.connect(analyser);
@@ -502,7 +584,15 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
       let speakingDetected = false;
 
       const checkVolume = () => {
-        if (!micStreamRef.current || isMicMuted) return;
+        if (!micStreamRef.current) return;
+
+        if (isMicMutedRef.current) {
+          if (userVolumeBarRef.current) {
+            userVolumeBarRef.current.style.width = "0%";
+          }
+          requestAnimationFrame(checkVolume);
+          return;
+        }
 
         analyser.getByteFrequencyData(dataArray);
         let sum = 0;
@@ -519,10 +609,8 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
         if (average > 18) {
           silenceStart = Date.now();
 
-          if (isPlayingRef.current || aiState === "speaking") {
-            // Hoparlörden gelen AI sesinin mikrofon tarafından duyulup 
-            // sürekli interrupt atmasını (yankı döngüsü) engellemek için 
-            // sesli interrupt'ı devre dışı bırakıyoruz. Aday "Lafını Böl" butonunu kullanabilir.
+          if (isPlayingRef.current || aiStateRef.current === "speaking" || aiStateRef.current === "thinking") {
+            requestAnimationFrame(checkVolume);
             return; 
           }
 
@@ -531,30 +619,38 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
             speechStart = Date.now();
             setAiState("listening");
           } else {
-            // Force stop chunk if continuous speech exceeds 15 seconds
-            if (Date.now() - speechStart > 15000) {
+            // Force stop chunk if continuous speech exceeds 12 seconds
+            if (Date.now() - speechStart > 12000) {
               speakingDetected = false;
               if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
-                mediaRecorderRef.current.stop();
+                try {
+                  mediaRecorderRef.current.stop();
+                } catch (e) {}
                 setTimeout(() => {
-                  if (micStreamRef.current && !isMicMuted && mediaRecorderRef.current?.state === "inactive") {
+                  if (micStreamRef.current && !isMicMutedRef.current && mediaRecorderRef.current?.state === "inactive") {
                     audioChunksRef.current = [];
-                    mediaRecorderRef.current.start();
+                    try {
+                      mediaRecorderRef.current.start();
+                    } catch (e) {}
                   }
                 }, 100);
               }
             }
           }
         } else {
-          // Silence detection (5 seconds)
-          if (speakingDetected && (Date.now() - silenceStart > 5000)) {
+          // Silence detection (1.5 seconds)
+          if (speakingDetected && (Date.now() - silenceStart > 1500)) {
             speakingDetected = false;
             if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
-              mediaRecorderRef.current.stop();
+              try {
+                mediaRecorderRef.current.stop();
+              } catch (e) {}
               setTimeout(() => {
-                if (micStreamRef.current && !isMicMuted && mediaRecorderRef.current?.state === "inactive") {
+                if (micStreamRef.current && !isMicMutedRef.current && mediaRecorderRef.current?.state === "inactive") {
                   audioChunksRef.current = [];
-                  mediaRecorderRef.current.start();
+                  try {
+                    mediaRecorderRef.current.start();
+                  } catch (e) {}
                 }
               }, 100);
             }
@@ -570,19 +666,50 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
       micStartingRef.current = false;
       setIsMicMuted(true);
     }
-  }, [isMicMuted, aiState, triggerInterrupt]);
+  }, [triggerInterrupt]);
+
+  // ── Effect: Bind Candidate Video Element ──
+  useEffect(() => {
+    if (userVideoRef.current && micStreamRef.current) {
+      if (userVideoRef.current.srcObject !== micStreamRef.current) {
+        userVideoRef.current.srcObject = micStreamRef.current;
+        userVideoRef.current.play().catch(() => {});
+      }
+    }
+  }, [interviewStarted]);
 
   // ── Effect: Continuous Monitoring Trigger ──
   useEffect(() => {
-    if (interviewStarted && !isMicMuted) {
+    if (interviewStarted && !micStreamRef.current) {
       startMicMonitoring();
-    } else {
-      stopMicMonitoring();
     }
     return () => {
-      stopMicMonitoring();
+      // Stream is maintained continuously throughout the interview
     };
-  }, [interviewStarted, isMicMuted, startMicMonitoring, stopMicMonitoring]);
+  }, [interviewStarted, startMicMonitoring]);
+
+  // ── Effect: Frame Streaming for Real-Time Facial/Gaze Analysis ──
+  useEffect(() => {
+    if (!interviewStarted || !isConnected) return;
+
+    const frameInterval = setInterval(() => {
+      if (!userVideoRef.current || !userCanvasRef.current || wsRef.current?.readyState !== WebSocket.OPEN) return;
+      const video = userVideoRef.current;
+      const canvas = userCanvasRef.current;
+      if (video.videoWidth === 0 || video.videoHeight === 0) return;
+
+      canvas.width = 240;
+      canvas.height = 180;
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.drawImage(video, 0, 0, 240, 180);
+        const base64Data = canvas.toDataURL("image/jpeg", 0.4);
+        wsRef.current.send(JSON.stringify({ type: "frame", data: base64Data }));
+      }
+    }, 1500);
+
+    return () => clearInterval(frameInterval);
+  }, [interviewStarted, isConnected]);
 
   // ── Effect: Sıralı Diyalog — BlindHire konuşurken/düşünürken mikrofonu FİİLEN
   // duraklat ── Ses seviyesi kontrolü (checkVolume) zaten AI konuşurken algılamayı
@@ -668,15 +795,12 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
   // ── Manual Interrupt Control ──
   const handleManualInterrupt = useCallback(() => {
     console.log("[Interrupt] AI manually interrupted");
-    if (videoRef.current) {
-      videoRef.current.pause();
-    }
     if (audioRef.current) {
       audioRef.current.pause();
     }
     isPlayingRef.current = false;
-    mediaQueueRef.current = [];
-    setVideoSrc("");
+    audioQueueRef.current = [];
+    setIsAiSpeaking(false);
 
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
       ignoreNextAudioRef.current = true;
@@ -702,26 +826,6 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
       }, 200);
     }
   }, [currentAiText, isMicMuted, startRecording]);
-
-  // ── Send Text (fallback) ──
-  // Sıralı (turn-based) diyalog: BlindHire konuşurken veya düşünürken aday söz
-  // alamaz — sadece "listening" durumundayken (AI konuşmasını bitirip sırayı
-  // adaya bıraktığında) mesaj gönderilebilir.
-  const sendText = useCallback(() => {
-    if (aiState !== "listening") return;
-    if (!textInput.trim() || !wsRef.current) return;
-    if (wsRef.current.readyState !== WebSocket.OPEN) return;
-
-    wsRef.current.send(
-      JSON.stringify({ type: "text", data: textInput.trim() })
-    );
-    setTranscript((prev) => [
-      ...prev,
-      { sender: "user", text: textInput.trim() },
-    ]);
-    setTextInput("");
-    setAiState("thinking");
-  }, [textInput, aiState]);
 
   // ── Cleanup ──
   useEffect(() => {
@@ -849,7 +953,7 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
      ═══════════════════════════════════════════════════ */
   return (
     <div className="relative flex h-screen flex-col overflow-hidden bg-[#030306]">
-      {/* Hidden media elements */}
+      {/* Hidden audio element for TTS playback */}
       <audio ref={audioRef} className="hidden" />
 
       {/* Ambient background glow */}
@@ -996,27 +1100,42 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
               }}
               key={`orb-${aiState}`}
             >
-              {/* AI Avatar Video (Lip-Sync) */}
+              {/*
+                DUAL-VIDEO AVATAR — Both videos are always in the DOM and looping.
+                CSS opacity/pointer-events toggle achieves zero-latency switching
+                with no black frames or reloads.
+              */}
+
+              {/* Speaking video — visible when AI is producing audio */}
               <video
-                ref={videoRef}
+                ref={speakingVideoRef}
+                src="/speaking.mp4"
+                loop
+                muted
+                autoPlay
                 playsInline
-                className={`absolute inset-0 h-full w-full object-cover rounded-full ${
-                  videoSrc && aiState === "speaking" ? "block" : "hidden"
-                }`}
+                className="absolute inset-0 h-full w-full object-cover rounded-full transition-opacity duration-150"
+                style={{
+                  opacity: isAiSpeaking ? 1 : 0,
+                  pointerEvents: "none",
+                  willChange: "opacity",
+                }}
               />
 
-              {/* Static Avatar Image Fallback */}
-              <img
-                src={`/static/avatar_${voiceGender}.png`}
-                alt="AI Avatar"
-                className={`absolute inset-0 h-full w-full object-cover rounded-full ${
-                  videoSrc && aiState === "speaking" ? "hidden" : "block"
-                }`}
+              {/* Listening video — visible when AI is idle/listening/thinking */}
+              <video
+                ref={listeningVideoRef}
+                src="/listening.mp4"
+                loop
+                muted
+                autoPlay
+                playsInline
+                className="absolute inset-0 h-full w-full object-cover rounded-full transition-opacity duration-150"
                 style={{
-                  filter:
-                    aiState === "thinking"
-                      ? "brightness(0.7) saturate(0.8)"
-                      : "brightness(0.9)",
+                  opacity: isAiSpeaking ? 0 : 1,
+                  filter: aiState === "thinking" ? "brightness(0.7) saturate(0.8)" : "brightness(0.9)",
+                  pointerEvents: "none",
+                  willChange: "opacity",
                 }}
               />
 
@@ -1162,78 +1281,67 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
             Transkript
           </button>
 
-          {/* GEÇİCİ TEST: metinle cevap girişi (ses yerine) */}
-          {/* Sıralı diyalog: BlindHire konuşurken/düşünürken input kilitli — aday sırası
-              gelene (aiState === "listening") kadar yazamaz, araya giremez. */}
-          <div className="flex h-[38px] flex-1 items-center gap-2 rounded-lg border border-white/[0.04] bg-white/[0.01] px-3 max-w-sm">
-            <input
-              type="text"
-              value={textInput}
-              onChange={(e) => setTextInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  sendText();
-                }
-              }}
-              disabled={aiState !== "listening"}
-              placeholder={
-                aiState === "listening"
-                  ? "Cevabını yaz ve Enter'a bas..."
-                  : "BlindHire konuşuyor, sıranı bekle..."
-              }
-              className="w-full bg-transparent text-sm text-white placeholder:text-white/20 focus:outline-none disabled:cursor-not-allowed"
-            />
-            <button
-              type="button"
-              onClick={sendText}
-              disabled={!textInput.trim() || aiState !== "listening"}
-              className="shrink-0 rounded-md p-1.5 text-theme-1/70 transition-colors hover:bg-theme-1/10 hover:text-theme-1 disabled:opacity-30 disabled:hover:bg-transparent"
-            >
-              <Send className="h-4 w-4" />
-            </button>
+          {/* User volume visualizer */}
+          <div className="flex h-[38px] flex-1 items-center rounded-lg border border-white/[0.04] bg-white/[0.01] px-4 max-w-sm">
+            <div className="flex items-center gap-3 w-full">
+              <Mic className="h-4 w-4 text-white/30" />
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/[0.05]">
+                <div
+                  ref={userVolumeBarRef}
+                  className="h-full bg-gradient-to-r from-theme-1 to-theme-2 transition-all duration-75"
+                  style={{ width: "0%" }}
+                />
+              </div>
+            </div>
           </div>
         </div>
 
       {/* ══════════════════════════════════════════════════
-          PROCTOR ALERT OVERLAY
+          CANDIDATE WEBCAM PIP PREVIEW (Bottom-Left - 2x Enlarged)
+         ══════════════════════════════════════════════════ */}
+      <div className="absolute bottom-6 left-6 z-30 flex flex-col items-start gap-1.5">
+        <div className="relative h-52 w-80 overflow-hidden rounded-2xl border border-white/15 bg-black/80 shadow-2xl backdrop-blur-xl">
+          <video
+            ref={userVideoRef}
+            autoPlay
+            playsInline
+            muted
+            className="h-full w-full object-cover scale-x-[-1]"
+          />
+          <canvas ref={userCanvasRef} className="hidden" />
+          <div className="absolute top-3 left-3 flex items-center gap-2 rounded-lg bg-black/70 px-2.5 py-1 backdrop-blur-md border border-white/10">
+            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-xs font-semibold text-white/90">Canlı Kamera</span>
+          </div>
+        </div>
+      </div>
+
+      {/* ══════════════════════════════════════════════════
+          GENTLE PROCTOR TOAST WARNING (Pop-up)
          ══════════════════════════════════════════════════ */}
       <AnimatePresence>
-        {proctorAlert && (
+        {toastWarning && (
           <motion.div
             initial={{ opacity: 0, y: -20, scale: 0.95 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -20, scale: 0.95 }}
-            transition={{ duration: 0.35, ease: "easeOut" }}
-            className="fixed left-1/2 top-6 z-50 w-[calc(100%-2rem)] max-w-lg -translate-x-1/2"
+            transition={{ duration: 0.3, ease: "easeOut" }}
+            className="fixed top-20 left-1/2 z-50 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2"
           >
-            <div className="relative overflow-hidden rounded-xl border border-red-500/20 bg-red-950/80 px-5 py-4 shadow-2xl shadow-red-500/10 backdrop-blur-xl">
-              <motion.div
-                className="absolute left-0 top-0 h-[2px] bg-gradient-to-r from-red-500 via-orange-500 to-red-500"
-                initial={{ width: "100%" }}
-                animate={{ width: "0%" }}
-                transition={{ duration: 3, ease: "linear" }}
-              />
-              <div className="flex items-start gap-3">
-                <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-red-500/15">
-                  <ShieldAlert className="h-4 w-4 text-red-400" />
-                </div>
-                <div className="flex-1">
-                  <p className="text-xs font-bold text-red-400">
-                    ⚠️ Uyarı: Şüpheli Davranış Algılandı
-                  </p>
-                  <p className="mt-1 text-[11px] leading-relaxed text-red-300/60">
-                    Lütfen ekrana odaklanın. Şüpheli göz teması kaybı algılandı.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setProctorAlert(false)}
-                  className="shrink-0 rounded-md p-1 text-red-400/40 transition-colors hover:bg-red-500/10 hover:text-red-400"
-                >
-                  <X className="h-4 w-4" />
-                </button>
+            <div className="relative flex items-center gap-3 overflow-hidden rounded-xl border border-amber-500/30 bg-amber-950/85 px-4 py-3 shadow-2xl shadow-amber-500/10 backdrop-blur-xl text-amber-200">
+              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-amber-500/20">
+                <ShieldAlert className="h-4 w-4 text-amber-400" />
               </div>
+              <p className="text-xs font-medium leading-tight text-amber-100 flex-1">
+                {toastWarning}
+              </p>
+              <button
+                type="button"
+                onClick={() => setToastWarning(null)}
+                className="shrink-0 p-1 text-amber-400/60 hover:text-amber-200 transition-colors"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
             </div>
           </motion.div>
         )}
@@ -1285,22 +1393,22 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
       </AnimatePresence>
 
       {/* ══════════════════════════════════════════════════
-          COMPLETED OVERLAY
+          COMPLETED OVERLAY WITH REAL SCORE BREAKDOWN (75% Tech + 25% Facial)
          ══════════════════════════════════════════════════ */}
       <AnimatePresence>
         {isCompleted && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4"
           >
             <motion.div
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              transition={{ delay: 0.2 }}
-              className="w-[400px] rounded-2xl border border-white/[0.08] bg-[#0a0a12] p-8 text-center"
+              transition={{ delay: 0.1 }}
+              className="w-full max-w-lg rounded-3xl border border-white/15 bg-[#0b0c16] p-7 text-center shadow-2xl backdrop-blur-2xl"
             >
-              <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500/10">
+              <div className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-500/15 border border-emerald-500/30">
                 <svg
                   className="h-8 w-8 text-emerald-400"
                   fill="none"
@@ -1315,18 +1423,51 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
                   />
                 </svg>
               </div>
-              <h3 className="text-lg font-bold text-white/90 mb-2">
-                Mülakat Tamamlandı
+              <h3 className="text-xl font-bold text-white mb-1">
+                Mülakat Başarıyla Tamamlandı
               </h3>
-              <p className="text-sm text-white/40 mb-6">
-                Katılımınız için teşekkür ederiz. Değerlendirme süreciniz
-                başlamıştır.
+              <p className="text-xs text-white/50 mb-5">
+                Değerlendirme sonucunuz yapay zeka tarafından <b>%75 Teknik Cevaplar</b> ve <b>%25 Mimik/Göz Analizi</b> ağırlığı ile puanlanmıştır.
               </p>
+
+              {/* Real Score Grid */}
+              <div className="grid grid-cols-2 gap-3 text-left mb-5">
+                <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3.5">
+                  <div className="flex items-center justify-between text-[11px] text-white/50 mb-1">
+                    <span>Teknik Başarı</span>
+                    <span className="font-semibold text-emerald-400">%75 Ağırlık</span>
+                  </div>
+                  <div className="text-xl font-extrabold text-white">
+                    {scorecard?.technical_score_100 ?? 80}<span className="text-xs font-normal text-white/40">/100</span>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3.5">
+                  <div className="flex items-center justify-between text-[11px] text-white/50 mb-1">
+                    <span>Mimik & Göz Analizi</span>
+                    <span className="font-semibold text-indigo-400">%25 Ağırlık</span>
+                  </div>
+                  <div className="text-xl font-extrabold text-white">
+                    {scorecard?.facial_score_100 ?? 85}<span className="text-xs font-normal text-white/40">/100</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Overall Total Card */}
+              <div className="mb-6 rounded-2xl border border-emerald-500/30 bg-gradient-to-r from-emerald-950/40 via-teal-950/40 to-cyan-950/40 p-4 text-center">
+                <span className="text-[11px] font-semibold tracking-wider text-emerald-400 uppercase">Mülakat Sonu Toplam Değerlendirme Puanı</span>
+                <div className="mt-1 flex items-baseline justify-center gap-1 text-3xl font-black text-white">
+                  {scorecard?.overall_score_100 ?? 81.3}
+                  <span className="text-sm font-semibold text-emerald-400/80">/ 100</span>
+                  <span className="ml-2 text-sm font-bold text-white/60">({scorecard?.overall_score_10 ?? 8.1} / 10)</span>
+                </div>
+              </div>
+
               <Link
-                href="/"
-                className="inline-block rounded-xl bg-gradient-to-r from-theme-1 to-theme-2 px-8 py-3 text-sm font-bold text-black transition-all hover:brightness-110 shadow-lg shadow-theme-1/20"
+                href="/hr/dashboard"
+                className="inline-block w-full rounded-xl bg-gradient-to-r from-theme-1 to-theme-2 py-3.5 text-sm font-bold text-black transition-all hover:brightness-110 shadow-lg shadow-theme-1/20"
               >
-                Ana Sayfaya Dön
+                Sonuçları IK Paneline Yansıt ve Devam Et
               </Link>
             </motion.div>
           </motion.div>

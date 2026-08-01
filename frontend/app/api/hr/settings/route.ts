@@ -35,6 +35,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         stage3AutoRejectThreshold: 50,
         stage4AutoHireThreshold: 80,
         stage4AutoRejectThreshold: 50,
+        autoApproveJobs: false,
         createdAt: new Date(),
         updatedAt: new Date()
       };

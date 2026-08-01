@@ -4,9 +4,6 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
   serverExternalPackages: ['@prisma/client', 'prisma', 'pdf-parse'],
-  devIndicators: {
-    buildActivity: false,
-  },
   async rewrites() {
     return [
       // FastAPI backend proxy — statik dosyalar (avatar, cache, video)

@@ -1,0 +1,11 @@
+{
+  "duration_seconds": 68.9,
+  "violation_count": 0,
+  "violations": [],
+  "emotion_distribution": {
+    "Neutral": 588,
+    "Happiness": 15,
+    "Disgust": 15
+  },
+  "dominant_emotion": "Neutral"
+}

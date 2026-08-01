@@ -33,31 +33,43 @@ export const STOP_WORDS = new Set([
 
 export const domainDictMap = new Map<string, number>();
 
-try {
-  const dictPath = path.join(process.cwd(), 'domain-dictionary.json');
-  if (fs.existsSync(dictPath)) {
-    const rawDict = fs.readFileSync(dictPath, 'utf8');
-    const parsed = JSON.parse(rawDict);
-    if (parsed && parsed.fields) {
-      for (const fieldName of Object.keys(parsed.fields)) {
-        const fieldData = parsed.fields[fieldName];
-        if (fieldData && Array.isArray(fieldData.terms)) {
-          for (const termObj of fieldData.terms) {
-            if (termObj.term && typeof termObj.weight === 'number') {
-              const normTerm = normalizeText(termObj.term);
-              const existingWeight = domainDictMap.get(normTerm) || 0;
-              if (termObj.weight > existingWeight) {
-                domainDictMap.set(normTerm, termObj.weight);
+function loadDomainDictionary() {
+  try {
+    const possiblePaths = [
+      path.join(process.cwd(), 'domain-dictionary.json'),
+      path.join(process.cwd(), 'frontend', 'domain-dictionary.json'),
+      path.join(__dirname, '..', 'domain-dictionary.json'),
+    ];
+
+    for (const dictPath of possiblePaths) {
+      if (fs.existsSync(dictPath)) {
+        const rawDict = fs.readFileSync(dictPath, 'utf8');
+        const parsed = JSON.parse(rawDict);
+        if (parsed && parsed.fields) {
+          for (const fieldName of Object.keys(parsed.fields)) {
+            const fieldData = parsed.fields[fieldName];
+            if (fieldData && Array.isArray(fieldData.terms)) {
+              for (const termObj of fieldData.terms) {
+                if (termObj.term && typeof termObj.weight === 'number') {
+                  const normTerm = normalizeText(termObj.term);
+                  const existingWeight = domainDictMap.get(normTerm) || 0;
+                  if (termObj.weight > existingWeight) {
+                    domainDictMap.set(normTerm, termObj.weight);
+                  }
+                }
               }
             }
           }
         }
+        break;
       }
     }
+  } catch (err) {
+    console.error('Failed to load domain-dictionary.json:', err);
   }
-} catch (err) {
-  console.error('Failed to load domain-dictionary.json:', err);
 }
+
+loadDomainDictionary();
 
 export function extractRequirements(description: string): string[] {
   const cleanDescription = description.replace(/<[^>]*>?/gm, ' ');
@@ -67,16 +79,24 @@ export function extractRequirements(description: string): string[] {
   
   // Cross-reference the normalized job description text against the domain dictionary
   for (const term of domainDictMap.keys()) {
-    // We check if the term exists as a distinct word/phrase in the description.
-    // Adding word boundaries avoids partial matches (e.g. "net" matching inside "network")
-    const escapedTerm = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    // For words like "c++" which end in a non-word character, \b at the end fails. 
-    // It's safer to just check boundaries for standard words, or pad with spaces.
-    // Actually, simple regex with \b works if we handle boundaries properly. 
-    // But since the text is normalized, let's just pad it and the text with spaces.
     const paddedDesc = ` ${normalizedDesc} `;
-    if (paddedDesc.includes(` ${term} `)) {
+    if (paddedDesc.includes(` ${term} `) || normalizedDesc.includes(term)) {
       techTerms.add(term);
+    }
+  }
+
+  // Fallback: If dictionary matching yields fewer than 4 terms, parse significant terms directly
+  if (techTerms.size < 4) {
+    const tokens = cleanDescription.split(/\s+/);
+    for (const rawToken of tokens) {
+      const cleanToken = normalizeText(rawToken);
+      if (
+        cleanToken.length > 2 &&
+        !STOP_WORDS.has(cleanToken) &&
+        !/^\d+$/.test(cleanToken)
+      ) {
+        techTerms.add(cleanToken);
+      }
     }
   }
 

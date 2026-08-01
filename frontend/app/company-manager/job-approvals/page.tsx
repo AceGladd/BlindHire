@@ -3,6 +3,21 @@
 import { useEffect, useState, useCallback } from "react";
 import { Loader2, Briefcase, CheckCircle2, AlertTriangle, XCircle, Clock } from "lucide-react";
 
+/** Strip HTML tags and decode common entities */
+function stripHtml(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]*>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&quot;/g, '"')
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 interface Job {
   id: string;
   title: string;
@@ -119,7 +134,7 @@ export default function JobApprovalsPage() {
                   </span>
                 </div>
                 <div className="text-sm text-zinc-400 line-clamp-3">
-                  {job.description}
+                  {stripHtml(job.description)}
                 </div>
                 <div className="text-xs text-zinc-500">
                   Oluşturulma: {new Date(job.createdAt).toLocaleString("tr-TR")}

@@ -438,15 +438,6 @@ export default function PreflightStage({
                 {allPassed ? "Mülakata Başla" : "Tüm kontroller bekleniyor..."}
               </span>
             </button>
-
-            {/* Admin Bypass (Demo Test) */}
-            <button
-              type="button"
-              onClick={handleStart}
-              className="w-full rounded-xl border border-red-500/20 bg-red-500/[0.05] px-4 py-2 text-xs font-medium text-red-400 transition-colors hover:bg-red-500/10 hover:text-red-300"
-            >
-              🛠️ [Admin] Kontrolleri Atla (Demo Testi)
-            </button>
           </div>
         </motion.div>
       </div>

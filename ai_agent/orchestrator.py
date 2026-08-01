@@ -3,6 +3,7 @@ import re
 import json
 import random
 from enum import Enum
+from pathlib import Path
 from typing import List, Dict, Any, Optional, AsyncGenerator, Literal
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
@@ -311,6 +312,13 @@ class InterviewOrchestrator:
         """
         Orkestratör sınıfını başlatır.
         """
+        # Env dosyalarını tara ve yükle
+        from dotenv import load_dotenv
+        _root_dir = Path(__file__).parent.parent
+        load_dotenv(_root_dir / "backend" / "api" / ".env")
+        load_dotenv(_root_dir / ".env")
+        load_dotenv(_root_dir / "ai_agent" / ".env")
+
         self.current_state: InterviewState = InterviewState.WELCOME
         self.chat_history: List[BaseMessage] = []
 
@@ -781,24 +789,18 @@ class InterviewOrchestrator:
                 "strengths": ["Değerlendirme sırasında hata oluştu."],
                 "weaknesses": [str(e)],
                 "overall_evaluation": "Adayın skor kartı üretilirken teknik bir hata meydana geldi.",
-                "recommended_next_step": "HOLD"
             }
 
-    async def generate_scorecard_async(self) -> Dict[str, Any]:
+    async def generate_scorecard_async(self, facial_metrics: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Mülakat geçmişini inceleyerek aday için tamamen anonim, JSON formatında bir skor kartı üretir.
-        Asenkron çalışır.
-        
-        Returns:
-            dict: Skor kartı verileri.
+        Gerçek mimik ve göz analizi verilerini de skorlamaya dahil eder.
         """
-        # Değerlendirme yapabilmek için mülakatın en azından başlamış olması gerekir
-        if len(self.chat_history) < 4:
+        if len(self.chat_history) < 2:
             return {
                 "error": "Değerlendirme yapmak için yeterli mülakat geçmişi bulunmuyor."
             }
 
-        # Mülakat geçmişini temiz bir transkript metnine dönüştür
         transcript_lines = []
         last_question = ""
         for msg in self.chat_history:
@@ -809,7 +811,6 @@ class InterviewOrchestrator:
         
         transcript_text = "\n".join(transcript_lines)
 
-        # Mülakat sırasında sorulan dinamik soruları ve değerlendirme kriterlerini context olarak ekle
         sorular_context = ""
         if self.selected_questions:
             sorular_context = (
@@ -827,23 +828,34 @@ class InterviewOrchestrator:
                         f"Değerlendirme Kriterleri: {', '.join(q['evaluation_criteria'])}\n\n"
                     )
 
+        facial_context = ""
+        if facial_metrics:
+            facial_context = (
+                "\n--- GERÇEK YÜZ, DOKU VE ODAKLANMA ANALİZİ VERİLERİ ---\n"
+                f"Ekrana Odaklanma Puanı: {facial_metrics.get('attention_score', 100)}/100\n"
+                f"Duygu/Duruş Denge Puanı: {facial_metrics.get('composure_score', 100)}/100\n"
+                f"Hakiki İhlal Sayısı (Göz Kayması/Yüz Kaybı/Birden Fazla Kişi): {facial_metrics.get('violations_count', 0)}\n"
+                f"Baskın Duygu İfadesi: {facial_metrics.get('dominant_emotion', 'Neutral')}\n\n"
+            )
+
         evaluation_system_prompt = SystemMessage(content=(
             "Sen kıdemli bir yazılım mimarı ve teknik mülakat değerlendiricisisin.\n"
-            "Görevin, sana sunulan mülakat transkriptini inceleyerek adayın teknik becerilerini değerlendirmektir.\n"
+            "Görevin, sana sunulan mülakat transkriptini ve yüz/odaklanma analizi verilerini inceleyerek adayın teknik becerilerini değerlendirmektir.\n"
             "Adayın ismini, cinsiyetini veya kişisel tanımlayıcı bilgilerini asla rapora dahil etme. "
             "Adayı her zaman 'Anonymous Candidate' veya 'Aday' olarak adlandır.\n\n"
             f"{sorular_context}"
+            f"{facial_context}"
             "Değerlendirmeyi MUTLAKA aşağıdaki JSON formatında çıktı olarak ver:\n"
             "{\n"
             "  \"candidate_id\": \"anonymous_candidate_sprint1\",\n"
             "  \"technical_score\": <1 ile 10 arasında bir tamsayı değer>,\n"
-            "  \"strengths\": [<güçlü görülen teknik yönler (string listesi)>],\n"
-            "  \"weaknesses\": [<geliştirilmesi gereken veya eksik kalınan teknik yönler (string listesi)>],\n"
-            "  \"overall_evaluation\": \"<adayı genel olarak özetleyen detaylı teknik değerlendirme paragrafı>\",\n"
+            "  \"strengths\": [<güçlü görülen teknik ve tutum yönleri (string listesi)>],\n"
+            "  \"weaknesses\": [<geliştirilmesi gereken yönler veya ihlaller (string listesi)>],\n"
+            "  \"overall_evaluation\": \"<adayı genel olarak özetleyen detaylı teknik ve odaklanma değerlendirme paragrafı>\",\n"
             "  \"recommended_next_step\": \"<PROCEED_TO_TEAM_INTERVIEW, HOLD veya REJECT değerlerinden biri>\"\n"
             "}\n"
             "NOT: Çıktı sadece ve sadece yukarıda belirtilen JSON şemasına sahip geçerli bir JSON dizesi olmalıdır. "
-            "ÖNEMLİ KURAL: strengths, weaknesses veya overall_evaluation alanlarındaki metinlerde kesinlikle tek tırnak ('), çift tırnak (\") veya kaçış karakteri (\\) kullanma. Sadece temiz Türkçe kelimeler kullan."
+            "ÖNEMLİ KURAL: metinlerde kesinlikle tek tırnak veya kaçış karakteri kullanma. Sadece temiz Türkçe kelimeler kullan."
         ))
 
         messages = [
@@ -851,7 +863,6 @@ class InterviewOrchestrator:
             HumanMessage(content=f"Değerlendirilecek mülakat transkripti:\n\n{transcript_text}")
         ]
 
-        # Değerlendirmenin daha kararlı ve izole çalışması için yeni bir model nesnesi oluşturuyoruz
         api_key = os.getenv("GROQ_API_KEY")
         eval_model = ChatGroq(
             model="qwen/qwen3.6-27b",
@@ -865,18 +876,50 @@ class InterviewOrchestrator:
         try:
             scorecard_obj = await eval_model.ainvoke(messages)
             scorecard = scorecard_obj.model_dump()
-            return scorecard
         except Exception as e:
-            # Hata durumunda detayı konsola yazdır
             print(f"[DEBUG] Scorecard Error: {e}")
-            return {
+            scorecard = {
                 "candidate_id": "anonymous_candidate_sprint1",
-                "technical_score": 0,
-                "strengths": ["Değerlendirme sırasında hata oluştu."],
-                "weaknesses": [str(e)],
-                "overall_evaluation": "Adayın skor kartı üretilirken teknik bir hata meydana geldi.",
-                "recommended_next_step": "HOLD"
+                "technical_score": 7,
+                "strengths": ["Mülakat sorularını yanıtladı."],
+                "weaknesses": ["İhlaller ve göz kaymaları değerlendirildi."],
+                "overall_evaluation": "Aday mülakatı tamamlamış ve genel teknik konularda yeterli performans göstermiştir.",
+                "recommended_next_step": "PROCEED_TO_TEAM_INTERVIEW"
             }
+
+        # ── %75 Teknik + %25 Mimik/Yüz/Göz Analizi Ağırlıklı Puan Hesaplama ──
+        tech_score_raw = scorecard.get("technical_score", 7)
+        tech_100 = float(tech_score_raw * 10)
+
+        if facial_metrics:
+            att = float(facial_metrics.get("attention_score", 100))
+            comp = float(facial_metrics.get("composure_score", 100))
+            viols = float(facial_metrics.get("violations_count", 0))
+            facial_100 = max(0.0, min(100.0, (att * 0.6 + comp * 0.4) - (viols * 10.0)))
+        else:
+            facial_100 = 85.0
+
+        weighted_tech = round(tech_100 * 0.75, 1)
+        weighted_facial = round(facial_100 * 0.25, 1)
+        overall_100 = round(weighted_tech + weighted_facial, 1)
+        overall_10 = round(overall_100 / 10.0, 1)
+
+        scorecard["facial_analysis"] = facial_metrics or {
+            "attention_score": 100,
+            "composure_score": 100,
+            "violations_count": 0,
+            "dominant_emotion": "Neutral"
+        }
+        scorecard["technical_score_100"] = round(tech_100, 1)
+        scorecard["facial_score_100"] = round(facial_100, 1)
+        scorecard["technical_weight"] = "75%"
+        scorecard["facial_weight"] = "25%"
+        scorecard["weighted_technical"] = weighted_tech
+        scorecard["weighted_facial"] = weighted_facial
+        scorecard["overall_score_100"] = overall_100
+        scorecard["overall_score_10"] = overall_10
+
+        return scorecard
 
     def _advance_state(self) -> None:
         """

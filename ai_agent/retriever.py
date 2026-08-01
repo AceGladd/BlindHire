@@ -16,11 +16,14 @@ Kullanım:
 
 import os
 import json
+import logging
 from typing import List, Dict, Any, Optional
 
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
+
+logger = logging.getLogger("blindhire.retriever")
 
 
 class QuestionRetriever:
@@ -53,16 +56,28 @@ class QuestionRetriever:
         """
         self.data_path = data_path or self.DEFAULT_DATA_PATH
 
-        print(f"[Retriever] Embedding modeli yükleniyor: {embedding_model}")
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name=embedding_model,
-            model_kwargs={"device": "cpu"},
-            encode_kwargs={"normalize_embeddings": True}
-        )
+        logger.info(f"[Retriever] Embedding modeli yukleniyor: {embedding_model}")
+        try:
+            self.embeddings = HuggingFaceEmbeddings(
+                model_name=embedding_model,
+                model_kwargs={"device": "cpu"},
+                encode_kwargs={"normalize_embeddings": True}
+            )
+        except Exception as e:
+            logger.warning(f"[Retriever Warning] HuggingFace Hub baglanti uyarisi ({e}), yerel onbellek deneniyor...")
+            try:
+                self.embeddings = HuggingFaceEmbeddings(
+                    model_name=embedding_model,
+                    model_kwargs={"device": "cpu", "local_files_only": True},
+                    encode_kwargs={"normalize_embeddings": True}
+                )
+            except Exception as e2:
+                logger.error(f"[Retriever Error] Embedding yuklenemedi: {e2}")
+                raise e2
 
         self.documents: List[Document] = self._load_questions()
         self.vector_store: FAISS = self._build_index()
-        print(f"[Retriever] {len(self.documents)} soru başarıyla indekslendi.")
+        logger.info(f"[Retriever] {len(self.documents)} soru basariyla indekslendi.")
 
     def _load_questions(self) -> List[Document]:
         """
