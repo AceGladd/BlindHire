@@ -22,7 +22,7 @@ async function groqDeepAnalysis(
   const truncatedCV = cvText.substring(0, 10000);
 
   const completion = await groq.chat.completions.create({
-    model: "meta-llama/llama-4-scout-17b-16e-instruct",
+    model: "llama-3.3-70b-versatile",
     temperature: 0.1,
     max_tokens: 1200,
     messages: [

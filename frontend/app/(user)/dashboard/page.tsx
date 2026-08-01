@@ -15,6 +15,21 @@ import {
  X
 } from "lucide-react";
 
+/** Strip HTML tags and decode common entities */
+function stripHtml(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]*>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&quot;/g, '"')
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 interface JobPosting {
  id: string;
  title: string;
@@ -114,7 +129,7 @@ export default function CandidateDashboard(): React.JSX.Element {
   {job.title}
   </h3>
   <p className="text-sm text-zinc-400 line-clamp-3 mb-6">
-  {job.description}
+  {stripHtml(job.description)}
   </p>
   </div>
   

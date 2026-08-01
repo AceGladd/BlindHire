@@ -30,20 +30,18 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-# .env dosyasını yükle (backend/api/.env veya proje kökü)
-load_dotenv()
-# ai_agent .env dosyasını da yükle
-_ai_agent_env = Path(__file__).parent.parent.parent / "ai_agent" / ".env"
-if _ai_agent_env.exists():
-    load_dotenv(_ai_agent_env)
+# .env dosyalarını yükle (backend/api/.env, backend/.env veya proje kökü)
+load_dotenv(Path(__file__).parent / ".env")
+load_dotenv(Path(__file__).parent.parent / ".env")
+load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
 # ai_agent modülünü import edebilmek için sys.path'e ekle
 _ai_agent_path = str(Path(__file__).parent.parent.parent / "ai_agent")
 if _ai_agent_path not in sys.path:
     sys.path.insert(0, _ai_agent_path)
 
-from tts_service import TTSService
-from asr_service import ASRService
+from api.tts_service import TTSService
+from api.asr_service import ASRService
 
 # Logging yapılandırması
 logging.basicConfig(
@@ -186,6 +184,13 @@ async def websocket_interview(ws: WebSocket):
 
     orchestrator = None
     voice_preference = "male"
+    face_service = None
+
+    try:
+        from api.face_analysis_service import FaceAnalysisService
+        face_service = FaceAnalysisService()
+    except Exception as e:
+        logger.warning(f"[WS] FaceAnalysisService başlatılamadı: {e}")
 
     try:
         while True:
@@ -200,9 +205,26 @@ async def websocket_interview(ws: WebSocket):
             msg_type = msg.get("type", "")
 
             # ────────────────────────────────
+            #  FRAME: Yüz & Göz Analizi Karesi
+            # ────────────────────────────────
+            if msg_type == "frame":
+                if face_service and face_service.enabled:
+                    img_data = msg.get("data", "")
+                    if img_data:
+                        analysis_res = await asyncio.to_thread(face_service.process_frame, img_data)
+                        warning = analysis_res.get("warning")
+                        if warning:
+                            logger.info(f"[PROCTOR] Nazik Uyarı Tetiklendi: {warning['message']}")
+                            await ws.send_json({
+                                "type": "proctor_warning",
+                                "message": warning["message"],
+                                "code": warning.get("code", "WARNING")
+                            })
+
+            # ────────────────────────────────
             #  START: Mülakatı başlat
             # ────────────────────────────────
-            if msg_type == "start":
+            elif msg_type == "start":
                 voice_preference = msg.get("voice", "male")
                 logger.info(f"[WS] Mülakat başlatılıyor (ses: {voice_preference})...")
 
@@ -324,7 +346,8 @@ async def websocket_interview(ws: WebSocket):
                 await ws.send_json({"type": "thinking"})
 
                 try:
-                    scorecard = await orchestrator.generate_scorecard_async()
+                    facial_metrics = face_service.get_session_metrics() if face_service else None
+                    scorecard = await orchestrator.generate_scorecard_async(facial_metrics=facial_metrics)
                     await ws.send_json({"type": "scorecard", "data": scorecard})
                     logger.info(f"[WS] Skor kartı gönderildi: {scorecard.get('technical_score', 'N/A')}/10")
                 except Exception as e:
