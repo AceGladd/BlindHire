@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import nodemailer from "nodemailer";
+import { Resend } from "resend";
 import { PALETTES } from "@/lib/theme";
 import sharp from "sharp";
-import dns from "dns";
-
-dns.setDefaultResultOrder('ipv4first');
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
@@ -173,44 +170,32 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 </html>
     `;
 
-    const userEmail = process.env.SMTP_EMAIL;
-    const userPass = process.env.SMTP_PASSWORD;
+    const apiKey = process.env.RESEND_API_KEY;
 
-    if (!userEmail || !userPass || userEmail === "example@gmail.com") {
+    if (!apiKey || apiKey === "re_123456789") {
       console.log(`[MOCK EMAIL] Sent to ${email} for candidate ${candidateName}. Link: ${interviewLink}, Password: ${interviewPassword}`);
       return NextResponse.json({ message: "E-posta başarıyla gönderildi (MOCK MODU)." });
     }
 
-    const transporter = nodemailer.createTransport({
-      host: "smtp.gmail.com",
-      port: 587,
-      secure: false,
-      auth: {
-        user: userEmail,
-        pass: userPass,
-      },
-      family: 4,
-      connectionTimeout: 10000, // Bağlantı için 10 saniye bekle
-      socketTimeout: 10000,     // Socket veri akışı için 10 saniye bekle
-    } as any);
+    const resend = new Resend(apiKey);
 
-    const mailOptions: any = {
-      from: `"BlindHire Kariyer" <${userEmail}>`,
-      to: email,
+    const { data, error } = await resend.emails.send({
+      from: 'BlindHire Kariyer <onboarding@resend.dev>', // Resend test adresi (kendi alan adınızı doğrulayana kadar bunu kullanabilirsiniz)
+      to: [email],
       subject: `Kariyer Fırsatı: Mülakat Daveti - ${companyName || "Şirket"}`,
       html: htmlContent,
       attachments: [{
         filename: 'logo.png',
         content: pngBuffer,
-        cid: 'logo@blindhire.ai',
-        contentDisposition: 'inline',
-        contentType: 'image/png'
       }]
-    };
+    });
 
-    await transporter.sendMail(mailOptions);
+    if (error) {
+      console.error("Resend API Error:", error);
+      return NextResponse.json({ message: "E-posta gönderimi başarısız oldu.", error: error.message }, { status: 500 });
+    }
 
-    return NextResponse.json({ message: "E-posta başarıyla gönderildi." });
+    return NextResponse.json({ message: "E-posta başarıyla gönderildi.", data });
   } catch (err) {
     console.error("Email send error:", err);
     return NextResponse.json({ message: "E-posta gönderimi başarısız oldu.", error: err instanceof Error ? err.message : String(err) }, { status: 500 });
