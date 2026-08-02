@@ -11,7 +11,7 @@ export async function GET(): Promise<NextResponse> {
       orderBy: { createdAt: "desc" },
     });
 
-    const mappedUsers = hrUsers.map((u) => ({
+    const mappedUsers = hrUsers.map((u: any) => ({
       id: u.id,
       fullName: u.fullName,
       email: u.email,
