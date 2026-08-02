@@ -163,8 +163,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: "Yetkisiz erişim." }, { status: 403 });
     }
 
-    // Removed duplicate application fetch and hrUser check
-
     if (!application.cvUrl) {
       return NextResponse.json({ message: "Adayın CV'si bulunamadı." }, { status: 400 });
     }
@@ -200,14 +198,6 @@ export async function POST(request: NextRequest) {
     // 4. Call Groq
     const aiResult = await groqDeepAnalysis(cvText, reqs, application.jobPosting.title, application.jobPosting.description);
 
-    // 5. Fetch Stage 2 thresholds from company settings (use generated client name hRSettings)
-    // Replace older prisma.companySettings usages which may be undefined
-    const companySettings = await (prisma as any).hRSettings?.findUnique
-      ? (prisma as any).hRSettings.findUnique({ where: { companyId: application.jobPosting.companyId } })
-      : null;
-    const s2Reject = companySettings?.stage2AutoRejectThreshold ?? 60;
-
-    // 6. Update Application
     // 5. Fetch Stage 2 thresholds from company settings
     let companySettings: any = null;
     try {
@@ -246,8 +236,6 @@ export async function POST(request: NextRequest) {
       where: { id: applicationId },
       data: {
         reliability: aiResult.finalScore,
-        status: "LLM_REVIEW", // Move to Stage 2
-        // Optionally store the threshold used for auditing (not modifying other logic)
         status: newStatus
       }
     });
