@@ -141,11 +141,26 @@ app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 # ──────────────────────────────────────────────
 @app.get("/health")
 async def health_check():
+    # If ASR wasn't initialized at startup for any reason, try a lazy init here
+    global asr_service
+    if asr_service is None:
+        try:
+            from api.asr_service import ASRService
+            asr_service = ASRService()
+            logger.info("[Health] Lazy-initialized ASR service from /health check.")
+        except Exception as e:
+            logger.warning(f"[Health] ASR lazy-init failed: {e}")
+            asr_ok = False
+        else:
+            asr_ok = True
+    else:
+        asr_ok = True
+
     return {
         "status": "ok",
         "services": {
             "tts": tts_service is not None,
-            "asr": asr_service is not None,
+            "asr": asr_ok,
         },
     }
 
@@ -157,7 +172,7 @@ async def health_check():
 async def websocket_interview(ws: WebSocket):
     """
     Mülakat WebSocket endpoint'i.
-    
+
     Frontend → Backend mesaj formatları:
         {"type": "start", "voice": "male"|"female"}      → Mülakatı başlat
         {"type": "audio", "data": "<base64>"}             → Aday ses kaydı
@@ -179,6 +194,8 @@ async def websocket_interview(ws: WebSocket):
         {"type": "error", "message": "..."}               → Hata mesajı
         {"type": "completed"}                             → Mülakat tamamlandı
     """
+    global asr_service
+
     await ws.accept()
     logger.info("[WS] Yeni mülakat bağlantısı kuruldu.")
 
@@ -268,8 +285,15 @@ async def websocket_interview(ws: WebSocket):
                     continue
 
                 if not asr_service:
-                    await ws.send_json({"type": "error", "message": "ASR servisi kullanılamıyor."})
-                    continue
+                    # Try lazy initialization in case ASR failed to start at app startup
+                    try:
+                        from api.asr_service import ASRService
+                        asr_service = ASRService()
+                        logger.info("[ASR] Lazy-initialized ASR service in websocket handler.")
+                    except Exception as e:
+                        logger.error(f"[ASR] Lazy init failed: {e}")
+                        await ws.send_json({"type": "error", "message": "ASR servisi kullanılamıyor."})
+                        continue
 
                 audio_b64 = msg.get("data", "")
                 if not audio_b64:
