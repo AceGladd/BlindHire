@@ -120,13 +120,14 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [showExitConfirm, setShowExitConfirm] = useState<boolean>(false);
   const [currentAiText, setCurrentAiText] = useState<string>("");
-  const [textInput, setTextInput] = useState<string>("");
   const [interviewState, setInterviewState] = useState<string>("");
   const [isAiSpeaking, setIsAiSpeaking] = useState<boolean>(false);
   const [isCompleted, setIsCompleted] = useState<boolean>(false);
   const [isMicMuted, setIsMicMuted] = useState<boolean>(false);
   const [toastWarning, setToastWarning] = useState<string | null>(null);
   const [scorecard, setScorecard] = useState<any>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const errorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Refs ──
   const wsRef = useRef<WebSocket | null>(null);
@@ -149,6 +150,7 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
+  const micStartingRef = useRef<boolean>(false);
   const ignoreNextAudioRef = useRef<boolean>(false);
 
   // ── Countdown timer ──
@@ -352,7 +354,15 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
             break;
 
           case "error":
+            // Hata metni ASLA modelin ağzından çıkmış gibi sesli okunmaz/transkripte
+            // yazılmaz — sadece burada, kısa ömürlü görsel bir uyarı olarak gösterilir.
+            // "Düşünüyor" durumunda sonsuza kadar takılı kalmayı önlemek için aiState
+            // sıfırlanır.
             console.error("[WS Error]", msg.message);
+            setAiState("listening");
+            setErrorMessage("Bir bağlantı sorunu oluştu, lütfen tekrar dener misin?");
+            if (errorTimeoutRef.current) clearTimeout(errorTimeoutRef.current);
+            errorTimeoutRef.current = setTimeout(() => setErrorMessage(null), 6000);
             break;
         }
       } catch {
@@ -391,6 +401,9 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
 
   // ── Stop Mic Monitoring ──
   const stopMicMonitoring = useCallback(() => {
+    // Eğer bir başlatma işlemi devam ediyorsa (getUserMedia beklemede), onu iptal
+    // olarak işaretle — başlatma tamamlandığında akışı hemen kapatıp sızıntıyı önler.
+    micStartingRef.current = false;
     if (micStreamRef.current) {
       micStreamRef.current.getTracks().forEach((track) => track.stop());
       micStreamRef.current = null;
@@ -468,14 +481,27 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
 
   // ── Start Mic & Camera Monitoring ──
   const startMicMonitoring = useCallback(async () => {
+    // getUserMedia asenkron olduğu için, yalnızca micStreamRef.current kontrolü
+    // yeterli değil: bu fonksiyon üst üste (örn. React StrictMode'un dev modunda
+    // efektleri iki kez çalıştırması nedeniyle) çağrılırsa, ilk çağrı henüz
+    // getUserMedia'dan dönmeden ikinci çağrı da guard'ı geçip ikinci bir mikrofon
+    // akışı açabilir ve ilki hiç kapatılmadan sızabilir. Senkron bir "başlatılıyor"
+    // bayrağı bunu engeller.
+    if (micStreamRef.current || micStartingRef.current) return;
+    micStartingRef.current = true;
     try {
-      if (micStreamRef.current) return;
-
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: true,
         video: { width: { ideal: 640 }, height: { ideal: 480 } },
       });
+      if (!micStartingRef.current) {
+        // Bu bekleme sırasında stopMicMonitoring çağrılmış (örn. StrictMode
+        // cleanup'ı) — yeni açılan akışı hemen kapatıp sızıntıyı önle.
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
       micStreamRef.current = stream;
+      micStartingRef.current = false;
 
       // Assign video stream to candidate webcam element
       if (userVideoRef.current) {
@@ -637,6 +663,7 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
       requestAnimationFrame(checkVolume);
     } catch (err) {
       console.error("Mikrofon izleme hatası:", err);
+      micStartingRef.current = false;
       setIsMicMuted(true);
     }
   }, [triggerInterrupt]);
@@ -683,6 +710,29 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
 
     return () => clearInterval(frameInterval);
   }, [interviewStarted, isConnected]);
+
+  // ── Effect: Sıralı Diyalog — BlindHire konuşurken/düşünürken mikrofonu FİİLEN
+  // duraklat ── Ses seviyesi kontrolü (checkVolume) zaten AI konuşurken algılamayı
+  // yok sayıyordu, ama bu ek katman kaydın kendisini durdurarak hiçbir ses
+  // parçasının yakalanmamasını/gönderilmemesini garanti eder. Aday sırası
+  // geldiğinde (aiState === "listening") kayıt otomatik devam eder.
+  useEffect(() => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder) return;
+
+    if (aiState === "speaking" || aiState === "thinking") {
+      if (recorder.state === "recording") {
+        recorder.pause();
+      }
+    } else if (aiState === "listening") {
+      if (recorder.state === "paused") {
+        // Duraklatma sırasında biriken (AI'nin kendi sesinden sızmış olabilecek)
+        // ses parçalarını at, adayın gerçek konuşması temiz bir şekilde başlasın.
+        audioChunksRef.current = [];
+        recorder.resume();
+      }
+    }
+  }, [aiState]);
 
   // ── Push-to-Talk Controls (when Mic is Muted) ──
   const startRecording = useCallback(async () => {
@@ -777,27 +827,12 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
     }
   }, [currentAiText, isMicMuted, startRecording]);
 
-  // ── Send Text (fallback) ──
-  const sendText = useCallback(() => {
-    if (!textInput.trim() || !wsRef.current) return;
-    if (wsRef.current.readyState !== WebSocket.OPEN) return;
-
-    wsRef.current.send(
-      JSON.stringify({ type: "text", data: textInput.trim() })
-    );
-    setTranscript((prev) => [
-      ...prev,
-      { sender: "user", text: textInput.trim() },
-    ]);
-    setTextInput("");
-    setAiState("thinking");
-  }, [textInput]);
-
   // ── Cleanup ──
   useEffect(() => {
     return () => {
       wsRef.current?.close();
       stopMicMonitoring();
+      if (errorTimeoutRef.current) clearTimeout(errorTimeoutRef.current);
     };
   }, [stopMicMonitoring]);
 
@@ -901,11 +936,9 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
             {/* Start Button */}
             <button
               type="button"
-              onClick={() => {
-                connectWebSocket();
-                setTimeout(() => startInterview(), 500);
-              }}
-              className="w-full rounded-xl bg-gradient-to-r from-theme-1 to-theme-2 text-black py-3 text-sm font-bold transition-all duration-300 hover:brightness-110 shadow-lg shadow-theme-1/20"
+              disabled={interviewStarted}
+              onClick={startInterview}
+              className="w-full rounded-xl bg-gradient-to-r from-theme-1 to-theme-2 text-black py-3 text-sm font-bold transition-all duration-300 hover:brightness-110 shadow-lg shadow-theme-1/20 disabled:opacity-50 disabled:pointer-events-none"
             >
               Mülakatı Başlat
             </button>
@@ -1191,6 +1224,22 @@ export default function ArenaStage({ interviewId }: { interviewId: string }): Re
             >
               {config.label}
             </motion.p>
+          </AnimatePresence>
+
+          {/* Hata bildirimi: sadece görsel, asla sesli okunmaz */}
+          <AnimatePresence>
+            {errorMessage && (
+              <motion.div
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                className="rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-2"
+              >
+                <p className="text-center text-xs font-medium text-red-400">
+                  {errorMessage}
+                </p>
+              </motion.div>
+            )}
           </AnimatePresence>
 
           {/* Current AI text and Interrupt button */}

@@ -225,6 +225,14 @@ async def websocket_interview(ws: WebSocket):
             #  START: Mülakatı başlat
             # ────────────────────────────────
             elif msg_type == "start":
+                # Savunma amaçlı: bu bağlantıda mülakat zaten başlatılmışsa (örn.
+                # frontend'den yanlışlıkla iki kez "start" gönderilmesi durumunda),
+                # orkestratörü sıfırdan oluşturup mevcut konuşmayı kaybetmek yerine
+                # mevcut durumu aynen koru ve isteği sessizce yok say.
+                if orchestrator is not None:
+                    logger.warning("[WS] Mülakat zaten başlatılmış, tekrarlanan 'start' mesajı yok sayıldı.")
+                    continue
+
                 voice_preference = msg.get("voice", "male")
                 logger.info(f"[WS] Mülakat başlatılıyor (ses: {voice_preference})...")
 
@@ -390,6 +398,8 @@ async def _stream_and_pipeline(
 
     sentence_index = 0
     pending_tasks: list[asyncio.Task] = []
+    turn_start = time.time()
+    first_token_time: Optional[float] = None
 
     try:
         full_response = ""
@@ -400,6 +410,8 @@ async def _stream_and_pipeline(
             interrupted=interrupted,
             unfinished_ai_text=unfinished_ai_text,
         ):
+            if first_token_time is None:
+                first_token_time = time.time() - turn_start
             full_response += token
             buffer += token
 
@@ -456,6 +468,18 @@ async def _stream_and_pipeline(
         # Tüm paralel görevlerin tamamlanmasını bekle
         if pending_tasks:
             await asyncio.gather(*pending_tasks, return_exceptions=True)
+
+        # DEBUG: aday mesajı + modelin tam yanıtını + yanıt sürelerini sırasıyla tek
+        # satırda kaydet (canlı test/hata ayıklama için geçici log — pushlanmayacak).
+        # İlk-token-süresi = LLM'in ilk kelimeyi üretmesine kadar geçen süre (algılanan
+        # gecikme). Toplam-süre = TTS/LipSync dahil tüm işlem pipeline'ının süresi.
+        total_time = time.time() - turn_start
+        ilk_token_str = f"{first_token_time:.2f}sn" if first_token_time is not None else "N/A"
+        logger.info(
+            f"[TRANSKRIPT] Aday: {user_text!r} || BlindHire: {full_response!r} || "
+            f"Sonraki-Durum: {orchestrator.current_state.value} || "
+            f"İlk-Token: {ilk_token_str} || Toplam-Süre: {total_time:.2f}sn"
+        )
 
         # Bu tur bitti — avatar dinleme moduna geçiyor
         # Frontend'in audio.onended event'i zaten bunu tetikler;

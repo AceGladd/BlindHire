@@ -37,6 +37,7 @@ export default function PreflightStage({
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const animFrameRef = useRef<number>(0);
+  const requestingPermissionRef = useRef<boolean>(false);
 
   const allPassed = checks.internet && checks.microphone && checks.camera && checks.audio && checks.faceVisible && checks.audioClarity;
 
@@ -64,6 +65,12 @@ export default function PreflightStage({
 
   // Request permissions
   const handlePermission = useCallback(async () => {
+    // getUserMedia asenkron olduğu için tek başına bir state kontrolü yeterli
+    // değil — buton hızlıca iki kez tıklanırsa (veya benzeri bir çift tetikleme
+    // olursa) ikinci çağrı da ilk çağrı dönmeden önce başlayıp ikinci bir
+    // kamera/mikrofon akışı açabilir. Senkron bir bayrak bunu engeller.
+    if (requestingPermissionRef.current) return;
+    requestingPermissionRef.current = true;
     try {
       setStreamError(null);
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -167,6 +174,7 @@ export default function PreflightStage({
       };
 
     } catch (err: any) {
+      requestingPermissionRef.current = false;
       if (err.name === "NotAllowedError") {
         setStreamError("Kamera ve mikrofon erişimi reddedildi. Lütfen tarayıcı izinlerini kontrol edip tekrar deneyin.");
       } else if (err.name === "NotFoundError") {

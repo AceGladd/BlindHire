@@ -42,10 +42,11 @@ async def simulate_interview():
     for i, step in enumerate(candidate_steps):
         print(f"\n[AŞAMA]: {orchestrator.current_state.value}")
         
-        # Eğer bu aşama için bir soru seçilmişse debug bilgisini yazdır
+        # Eğer bu aşama için referans sorular seçilmişse debug bilgisini yazdır
         if orchestrator.current_state in orchestrator.selected_questions:
-            q_info = orchestrator.selected_questions[orchestrator.current_state]
-            print(f"[DEBUG - RAG]: Secilen Soru: {q_info['id']} ({q_info['category']})")
+            candidates = orchestrator.selected_questions[orchestrator.current_state]
+            ids = ", ".join(f"{q['id']} ({q['category']})" for q in candidates)
+            print(f"[DEBUG - RAG]: Referans Sorular: {ids}")
 
         response = step["text"]
         interrupted = step["interrupted"]
