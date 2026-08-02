@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { writeFile, mkdir } from "fs/promises";
-import path from "path";
 import { cookies } from "next/headers";
 
 export async function POST(request: NextRequest) {
@@ -14,11 +12,13 @@ export async function POST(request: NextRequest) {
 
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
-    const type = formData.get("type") as string; // 'cv' or 'transcript'
+    const type = formData.get("type") as string; // 'avatar', 'cv', 'transcript'
 
     if (!file) {
       return NextResponse.json({ message: "Dosya bulunamadı." }, { status: 400 });
     }
+
+    let mimeType = file.type;
 
     // MIME type check based on upload type
     if (type === "avatar") {
@@ -27,7 +27,6 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ message: "Profil fotoğrafı için sadece JPG, PNG veya WEBP formatları desteklenmektedir." }, { status: 400 });
       }
     } else {
-      // cv or transcript
       const validDocTypes = [
         "application/pdf", 
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // .docx
@@ -44,30 +43,25 @@ export async function POST(request: NextRequest) {
 
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
-
-    // Create unique filename
-    const ext = file.name.split('.').pop();
-    let fileName = `${type || 'doc'}_${userId}_${crypto.randomUUID()}.${ext}`;
     let processedBuffer = buffer;
 
+    // Avatar ise sharp ile kırpıp optimize edelim
     if (type === "avatar") {
-      const sharp = (await import("sharp")).default;
-      processedBuffer = await sharp(buffer)
-        .resize(256, 256, { fit: "cover" })
-        .webp({ quality: 80 })
-        .toBuffer();
-      
-      fileName = `${type}_${userId}_${crypto.randomUUID()}.webp`;
+      try {
+        const sharp = (await import("sharp")).default;
+        processedBuffer = await sharp(buffer)
+          .resize(256, 256, { fit: "cover" })
+          .webp({ quality: 80 })
+          .toBuffer();
+        mimeType = "image/webp";
+      } catch (e) {
+        console.error("Sharp processing error:", e);
+      }
     }
 
-    // Upload directory logic (Public folder for now, easy to migrate to S3)
-    const uploadDir = path.join(process.cwd(), "public", "uploads");
-    await mkdir(uploadDir, { recursive: true });
-
-    const filePath = path.join(uploadDir, fileName);
-    await writeFile(filePath, processedBuffer);
-
-    const fileUrl = `/uploads/${fileName}`;
+    // Render disk sınırlamasını aşmak için dosyayı doğrudan Base64 data URL formatına dönüştürüyoruz
+    const base64Data = processedBuffer.toString("base64");
+    const fileUrl = `data:${mimeType};base64,${base64Data}`;
 
     return NextResponse.json({ 
       message: "Dosya başarıyla yüklendi.", 
