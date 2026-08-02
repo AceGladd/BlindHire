@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { Resend } from "resend";
 import { PALETTES } from "@/lib/theme";
 import sharp from "sharp";
 
@@ -18,7 +17,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const theme = PALETTES.get ? PALETTES.find((p: any) => p.id === parsedThemeId) : PALETTES[0];
     const t1 = theme.colors[0];
     const t2 = theme.colors[1];
-    const t3 = theme.colors[2];
 
     const svgString = `<?xml version="1.0" encoding="UTF-8" ?>
 <svg width="216" height="154" viewBox="0 0 953 682" version="1.1" xmlns="http://www.w3.org/2000/svg">
@@ -35,11 +33,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 <path fill="${t2}" opacity="1.00" d=" M 744.33 117.51 C 750.30 114.95 757.15 118.42 760.63 123.43 C 763.95 127.94 763.10 133.83 763.27 139.08 C 762.92 162.04 763.71 185.01 763.08 207.97 C 762.86 215.82 754.87 222.66 747.06 221.29 C 740.09 219.92 735.27 212.94 735.33 206.03 C 735.47 180.65 735.19 155.28 735.45 129.90 C 735.47 124.43 739.40 119.56 744.33 117.51 Z" />
 <path fill="${t2}" opacity="1.00" d=" M 642.52 128.70 C 649.83 126.57 658.67 132.14 659.09 139.94 C 659.85 158.62 659.40 177.32 659.36 196.00 C 659.30 204.50 649.12 210.86 641.44 207.30 C 636.77 205.02 632.66 200.44 632.76 194.98 C 632.49 176.98 632.48 158.98 632.75 140.97 C 632.55 135.19 637.20 130.28 642.52 128.70 Z" />
 <path fill="${t2}" opacity="1.00" d=" M 795.36 142.71 C 803.30 139.81 813.73 146.10 813.29 154.96 C 813.11 164.95 813.88 175.00 812.57 184.95 C 811.30 191.44 804.31 195.44 798.01 194.98 C 792.93 194.82 787.87 191.31 786.84 186.18 C 784.70 176.93 786.02 167.39 785.64 158.00 C 785.24 151.50 789.09 144.87 795.36 142.71 Z" />
-<path fill="${t2}" opacity="1.00" d=" M 633.89 354.09 C 641.27 351.43 648.22 347.49 655.94 345.84 C 677.84 355.88 693.08 378.93 693.55 403.03 C 693.72 416.04 693.68 429.05 693.63 442.06 C 693.60 446.35 693.76 450.65 693.22 454.92 C 691.38 471.03 683.13 486.33 670.59 496.64 C 658.59 506.79 643.21 512.95 627.46 513.50 C 624.28 526.51 619.27 539.19 611.78 550.34 C 600.63 549.16 591.37 541.86 584.42 533.51 C 592.40 519.40 597.22 503.31 596.83 487.02 C 596.80 447.44 596.69 407.86 596.80 368.28 C 608.93 362.94 621.56 358.89 633.89 354.09 M 629.68 372.57 C 629.35 408.06 629.33 443.54 629.62 479.03 C 640.71 477.31 651.74 471.24 656.91 460.93 C 663.06 449.59 660.69 436.31 660.92 423.99 C 660.75 412.56 662.71 399.97 656.18 389.81 C 650.65 380.19 639.95 375.35 629.68 372.57 Z" />
+<path fill="${t2}" opacity="1.00" d=" M 633.89 354.09 C 641.27 351.43 648.22 347.49 655.94 345.84 C 677.84 355.88 693.08 378.93 693.55 403.03 C 693.72 416.04 693.68 429.05 693.63 442.06 C 693.60 446.35 693.76 450.65 693.22 454.92 C 691.38 471.03 683.13 486.33 670.59 496.64 C 658.59 506.79 643.21 512.95 627.46 513.50 C 624.28 526.51 619.27 539.19 611.78 550.34 C 600.63 549.16 591.37 541.86 584.42 533.51 M 444.41 578.66 C 435.84 581.46 430.70 591.39 432.94 600.05 C 434.90 610.04 446.69 615.97 456.13 613.01 C 466.35 610.10 472.30 597.15 467.48 587.59 C 463.75 579.10 452.85 575.33 444.41 578.66 Z" />
 </g>
 </svg>`;
 
     const pngBuffer = await sharp(Buffer.from(svgString)).png().toBuffer();
+    const base64Logo = pngBuffer.toString("base64");
 
     const htmlContent = `
 <!DOCTYPE html>
@@ -80,10 +79,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
                   </td>
                 </tr>
                 
-                <!-- Body Content -->
                 <tr>
                   <td style="padding: 24px; font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-                    <!-- Gradient Greeting Text -->
                     <h2 style="margin: 0 0 16px 0; font-size: 26px; font-weight: 700; font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
                        <span style="color: ${t1};">Merhaba </span><span style="color: ${t2};">${candidateName},</span>
                     </h2>
@@ -96,16 +93,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
                       Değerlendirme sürecinizin bir sonraki adımı olarak sizi yapay zeka destekli otonom mülakat platformumuza davet ediyoruz.
                     </p>
 
-                    <!-- Credentials Card -->
                     <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #121214; border: 1px solid #27272a; border-radius: 16px; overflow: hidden;">
                       <tr>
                         <td style="padding: 24px; text-align: center; font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-                          
-                          <!-- Access Code -->
                           <p style="margin: 0 0 12px 0; font-size: 16px; font-weight: 700; color: ${t2}; text-transform: uppercase; letter-spacing: 2px; font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
                             Tek Kullanımlık Erişim Kodunuz
                           </p>
-                          <!-- Forced width for password box to stretch it -->
                           <table width="380" border="0" cellspacing="0" cellpadding="0" align="center" style="margin-bottom: 24px;">
                             <tr>
                               <td align="center" style="background-color: #000000; padding: 20px 20px; border-radius: 12px; border: 1px solid #27272a; border-bottom: 2px solid ${t2}; font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
@@ -116,7 +109,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
                             </tr>
                           </table>
 
-                          <!-- Button -->
                           <table border="0" cellspacing="0" cellpadding="0" align="center">
                             <tr>
                               <td align="center" style="background: linear-gradient(135deg, ${t1}, ${t2}); border-radius: 10px; font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
@@ -134,7 +126,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
                       </tr>
                     </table>
 
-                    <!-- Hardware Note -->
                     <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top: 24px; background-color: #09090b; border-left: 4px solid ${t2}; border-radius: 8px;">
                       <tr>
                         <td style="padding: 12px 16px; font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
@@ -151,16 +142,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
               <table width="100%" border="0" cellspacing="0" cellpadding="0">
                 <tr><td height="40"></td></tr>
               </table>
-
             </td>
           </tr>
         </table>
         
-        <!-- Prevent Gmail Clipping -->
         <div style="display: none; white-space: nowrap; font: 15px courier; line-height: 0;">
           &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 
-          &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; 
-          &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;
           ID: ${Date.now()}-${Math.random()}
         </div>
       </td>
@@ -170,34 +157,58 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 </html>
     `;
 
-    const apiKey = process.env.RESEND_API_KEY;
+    const apiKey = process.env.BREVO_API_KEY;
 
-    if (!apiKey || apiKey === "re_123456789") {
+    if (!apiKey || apiKey === "xkeysib-example") {
       console.log(`[MOCK EMAIL] Sent to ${email} for candidate ${candidateName}. Link: ${interviewLink}, Password: ${interviewPassword}`);
       return NextResponse.json({ message: "E-posta başarıyla gönderildi (MOCK MODU)." });
     }
 
-    const resend = new Resend(apiKey);
-
-    const { data, error } = await resend.emails.send({
-      from: 'BlindHire Kariyer <onboarding@resend.dev>', // Resend test adresi (kendi alan adınızı doğrulayana kadar bunu kullanabilirsiniz)
-      to: [email],
-      subject: `Kariyer Fırsatı: Mülakat Daveti - ${companyName || "Şirket"}`,
-      html: htmlContent,
-      attachments: [{
-        filename: 'logo.png',
-        content: pngBuffer,
-      }]
+    const brevoRes = await fetch("https://api.brevo.com/v3/smtp/email", {
+      method: "POST",
+      headers: {
+        "accept": "application/json",
+        "api-key": apiKey,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        sender: {
+          name: "BlindHire Kariyer",
+          email: "blindhire.ai@gmail.com",
+        },
+        to: [
+          {
+            email: email,
+            name: candidateName || "Değerli Aday",
+          },
+        ],
+        subject: `Kariyer Fırsatı: Mülakat Daveti - ${companyName || "Şirket"}`,
+        htmlContent: htmlContent,
+        attachment: [
+          {
+            content: base64Logo,
+            name: "logo.png",
+          },
+        ],
+      }),
     });
 
-    if (error) {
-      console.error("Resend API Error:", error);
-      return NextResponse.json({ message: "E-posta gönderimi başarısız oldu.", error: error.message }, { status: 500 });
+    const brevoData = await brevoRes.json();
+
+    if (!brevoRes.ok) {
+      console.error("Brevo API Error:", brevoData);
+      return NextResponse.json(
+        { message: "E-posta gönderimi başarısız oldu.", error: brevoData.message || brevoData },
+        { status: 500 }
+      );
     }
 
-    return NextResponse.json({ message: "E-posta başarıyla gönderildi.", data });
+    return NextResponse.json({ message: "E-posta başarıyla gönderildi.", data: brevoData });
   } catch (err) {
     console.error("Email send error:", err);
-    return NextResponse.json({ message: "E-posta gönderimi başarısız oldu.", error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+    return NextResponse.json(
+      { message: "E-posta gönderimi başarısız oldu.", error: err instanceof Error ? err.message : String(err) },
+      { status: 500 }
+    );
   }
 }
