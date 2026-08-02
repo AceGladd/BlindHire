@@ -316,7 +316,7 @@ class InterviewOrchestrator:
             return "", buffer
         return buffer[:last_boundary], buffer[last_boundary:]
 
-    def __init__(self, model_name: str = "gemini-3.6-flash-lite", temperature: float = 0.3):
+    def __init__(self, model_name: str = "gemini-2.0-flash-lite", temperature: float = 0.3):
         """
         Orkestratör sınıfını başlatır.
         """
@@ -346,11 +346,9 @@ class InterviewOrchestrator:
             if not gemini_key:
                 raise ValueError("LLM_PROVIDER=gemini ayarlandı ama GEMINI_API_KEY bulunamadı. .env dosyasını kontrol edin.")
 
-            # Prefer env model, but normalize older 2.0 names to 3.6
+            # Prefer env model, do NOT normalize — use as-is if specified
             gemini_model_name = os.getenv("GEMINI_MODEL", self.default_model_name)
-            if "2.0" in gemini_model_name:
-                logger.warning(f"[Orchestrator] GEMINI_MODEL={gemini_model_name} looks like 2.0 — normalizing to 3.6 flash-lite")
-                gemini_model_name = gemini_model_name.replace("2.0", "3.6")
+            logger.info(f"[Orchestrator] Using GEMINI_MODEL={gemini_model_name}")
 
             try:
                 self.model = ChatGoogleGenerativeAI(
