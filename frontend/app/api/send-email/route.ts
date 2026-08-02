@@ -181,12 +181,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const transporter = nodemailer.createTransport({
       host: "smtp.gmail.com",
       port: 587,
-      secure: false, // 587 portu için false (STARTTLS) kullanılır
+      secure: false,
       auth: {
         user: userEmail,
         pass: userPass,
       },
-      family: 4, // Render'ın IPv6 kısıtlamasını aşarak IPv4 üzerinden bağlanmasını sağlar
+      family: 4,
+      connectionTimeout: 10000, // Bağlantı için 10 saniye bekle
+      socketTimeout: 10000,     // Socket veri akışı için 10 saniye bekle
     } as any);
 
     const mailOptions: any = {
