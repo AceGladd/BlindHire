@@ -15,7 +15,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
 
     const parsedThemeId = parseInt(String(themeId).replace("theme-", ""), 10);
-    const theme = PALETTES.find((p) => p.id === parsedThemeId) || PALETTES[0];
+    const theme = PALETTES.get ? PALETTES.find((p: any) => p.id === parsedThemeId) : PALETTES[0];
     const t1 = theme.colors[0];
     const t2 = theme.colors[1];
     const t3 = theme.colors[2];
@@ -208,6 +208,3 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ message: "E-posta gönderimi başarısız oldu.", error: err instanceof Error ? err.message : String(err) }, { status: 500 });
   }
 }
-
-
-
