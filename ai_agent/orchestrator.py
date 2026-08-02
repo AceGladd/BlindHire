@@ -316,7 +316,7 @@ class InterviewOrchestrator:
             return "", buffer
         return buffer[:last_boundary], buffer[last_boundary:]
 
-    def __init__(self, model_name: str = "gemini-3.6-flash-lite", temperature: float = 0.3):
+    def __init__(self, model_name: str = "gemini-3.5-flash-lite", temperature: float = 0.3):
         """
         Orkestratör sınıfını başlatır.
         """
