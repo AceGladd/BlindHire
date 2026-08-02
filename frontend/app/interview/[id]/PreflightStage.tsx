@@ -197,7 +197,14 @@ export default function PreflightStage({
     return () => {
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
       if (audioContextRef.current) {
-        void audioContextRef.current.close();
+        try {
+          if (audioContextRef.current.state !== "closed") {
+            void audioContextRef.current.close();
+          }
+        } catch (e) {
+          // ignore
+        }
+        audioContextRef.current = null;
       }
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
@@ -209,7 +216,14 @@ export default function PreflightStage({
     // Stop streams before transitioning
     if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     if (audioContextRef.current) {
-      void audioContextRef.current.close();
+      try {
+        if (audioContextRef.current.state !== "closed") {
+          void audioContextRef.current.close();
+        }
+      } catch (e) {
+        // ignore
+      }
+      audioContextRef.current = null;
     }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());

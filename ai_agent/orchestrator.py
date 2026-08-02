@@ -11,9 +11,13 @@ from langchain_groq import ChatGroq
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
 from retriever import QuestionRetriever
+import logging
 
 # .env dosyasındaki API anahtarını yükle
 load_dotenv()
+
+logger = logging.getLogger("blindhire.orchestrator")
+logger.addHandler(logging.NullHandler())
 
 class CandidateScorecard(BaseModel):
     """
@@ -258,7 +262,11 @@ class InterviewOrchestrator:
                 HumanMessage(content="/siniflandir")
             ])
             return self._parse_classification_label(self._extract_text(response.content))
-        except Exception:
+        except Exception as e:
+            # Eğer sınıflandırıcı LLM kotası/erişim hatası verirse, logla ama güvenli tarafta kal
+            err_text = str(e).lower()
+            if any(k in err_text for k in ("resource_exhausted", "quota", "429")):
+                logger.warning(f"[Orchestrator] Classifier LLM quota/erişim hatası: {e}")
             return "TAMAMLANDI"
 
     @staticmethod
@@ -308,7 +316,7 @@ class InterviewOrchestrator:
             return "", buffer
         return buffer[:last_boundary], buffer[last_boundary:]
 
-    def __init__(self, model_name: str = "qwen/qwen3.6-27b", temperature: float = 0.3):
+    def __init__(self, model_name: str = "gemini-3.6-flash-lite", temperature: float = 0.3):
         """
         Orkestratör sınıfını başlatır.
         """
@@ -319,6 +327,10 @@ class InterviewOrchestrator:
         load_dotenv(_root_dir / ".env")
         load_dotenv(_root_dir / "ai_agent" / ".env")
 
+        # Save defaults for potential fallback/reinit
+        self.default_model_name = model_name
+        self.temperature = temperature
+
         self.current_state: InterviewState = InterviewState.WELCOME
         self.chat_history: List[BaseMessage] = []
 
@@ -327,30 +339,64 @@ class InterviewOrchestrator:
         # ("groq" varsayılan; "gemini" yapılırsa GEMINI_API_KEY kullanılır). Bu SADECE
         # yerel test/geliştirme amaçlıdır — production varsayılanı Groq'tur.
         provider = os.getenv("LLM_PROVIDER", "groq").lower()
+        self.provider = provider
 
         if provider == "gemini":
             gemini_key = os.getenv("GEMINI_API_KEY")
             if not gemini_key:
                 raise ValueError("LLM_PROVIDER=gemini ayarlandı ama GEMINI_API_KEY bulunamadı. .env dosyasını kontrol edin.")
-            gemini_model_name = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
-            self.model = ChatGoogleGenerativeAI(
-                model=gemini_model_name,
-                temperature=temperature,
-                google_api_key=gemini_key,
-            )
-            self._classifier_model = ChatGoogleGenerativeAI(
-                model=gemini_model_name,
-                temperature=0.0,
-                google_api_key=gemini_key,
-            )
+
+            # Prefer env model, but normalize older 2.0 names to 3.6
+            gemini_model_name = os.getenv("GEMINI_MODEL", self.default_model_name)
+            if "2.0" in gemini_model_name:
+                logger.warning(f"[Orchestrator] GEMINI_MODEL={gemini_model_name} looks like 2.0 — normalizing to 3.6 flash-lite")
+                gemini_model_name = gemini_model_name.replace("2.0", "3.6")
+
+            try:
+                self.model = ChatGoogleGenerativeAI(
+                    model=gemini_model_name,
+                    temperature=self.temperature,
+                    google_api_key=gemini_key,
+                )
+                self._classifier_model = ChatGoogleGenerativeAI(
+                    model=gemini_model_name,
+                    temperature=0.0,
+                    google_api_key=gemini_key,
+                )
+                logger.info(f"[Orchestrator] LLM provider=gemini, model={gemini_model_name}")
+            except Exception as e:
+                logger.error(f"[Orchestrator] Gemini model başlatılamadı: {e}")
+                # Fallback to Groq if available
+                api_key = os.getenv("GROQ_API_KEY")
+                if api_key:
+                    logger.warning("[Orchestrator] Falling back to Groq due to Gemini init failure")
+                    self.provider = 'groq'
+                    self.model = ChatGroq(
+                        model=self.default_model_name,
+                        temperature=self.temperature,
+                        groq_api_key=api_key,
+                        reasoning_format="hidden",
+                        reasoning_effort="none",
+                        max_tokens=4096
+                    )
+                    self._classifier_model = ChatGroq(
+                        model="qwen/qwen3.6-27b",
+                        temperature=0.0,
+                        groq_api_key=api_key,
+                        reasoning_format="hidden",
+                        reasoning_effort="none",
+                        max_tokens=20
+                    )
+                else:
+                    raise
         else:
             api_key = os.getenv("GROQ_API_KEY")
             if not api_key:
                 raise ValueError("GROQ_API_KEY environment variable is not set. Please check your .env file.")
 
             self.model = ChatGroq(
-                model=model_name,
-                temperature=temperature,
+                model=self.default_model_name,
+                temperature=self.temperature,
                 groq_api_key=api_key,
                 reasoning_format="hidden",
                 reasoning_effort="none",
@@ -406,7 +452,11 @@ class InterviewOrchestrator:
         # 2. İlk başlatma kontrolü — karşılama sabit/adaydan bağımsız olduğu için
         # LLM çağrısı yapmadan, hazır varyasyonlardan biri rastgele seçilir.
         if not self.chat_history and (not user_text or user_text.lower() in ["/start", "start"]):
-            greeting = random.choice(self._WELCOME_GREETINGS)
+            # Deterministic welcome: start with a greeting, explain the session, then ask readiness
+            greeting = (
+                "Merhaba. Bugün kısa bir teknik mülakat yapacağız; sana birkaç kısa soru soracağım "
+                "ve cevaplarını değerlendireceğim. Hazır mısın?"
+            )
             self.chat_history.append(AIMessage(content=greeting))
             return greeting
 
@@ -515,15 +565,51 @@ class InterviewOrchestrator:
             self.chat_history.append(AIMessage(content=cleaned_response))
             return cleaned_response
         except Exception as e:
-            # ÖNEMLİ: Hata metnini normal bir model yanıtı gibi DÖNDÜRME — bu metin
-            # TTS'e gidip adaya sesli okunabilir. Son (bozuk) mesajı geçmişten çıkarıp
-            # hatayı yukarı fırlat.
+            err_text = str(e).lower()
+            if any(k in err_text for k in ("resource_exhausted", "quota", "429")):
+                logger.error(f"[Orchestrator] LLM quota hatası: {e}")
+                # Try fallback to Groq if available
+                api_key = os.getenv("GROQ_API_KEY")
+                if api_key and self.provider != 'groq':
+                    logger.info("[Orchestrator] Attempting fallback to Groq due to Gemini quota/error")
+                    try:
+                        self.provider = 'groq'
+                        self.model = ChatGroq(
+                            model=self.default_model_name,
+                            temperature=self.temperature,
+                            groq_api_key=api_key,
+                            reasoning_format="hidden",
+                            reasoning_effort="none",
+                            max_tokens=4096
+                        )
+                        self._classifier_model = ChatGroq(
+                            model="qwen/qwen3.6-27b",
+                            temperature=0.0,
+                            groq_api_key=api_key,
+                            reasoning_format="hidden",
+                            reasoning_effort="none",
+                            max_tokens=20
+                        )
+                        # retry once
+                        response = self.model.invoke(messages)
+                        ai_response = self._extract_text(response.content).strip()
+                        cleaned_response = self._clean_response_for_tts(ai_response)
+                        self.chat_history.append(AIMessage(content=cleaned_response))
+                        return cleaned_response
+                    except Exception as e2:
+                        logger.error(f"[Orchestrator] Fallback to Groq failed: {e2}")
+
+                # If fallback not possible or failed, return friendly message
+                msg = "Şu an LLM kotası aşıldı veya model erişilemez. Birkaç dakika sonra tekrar deneyin veya metin ile devam edin."
+                if self.chat_history and isinstance(self.chat_history[-1], AIMessage):
+                    self.chat_history.pop()
+                if self.current_state != state_before_turn:
+                    self._entered_states.discard(self.current_state)
+                    self.current_state = state_before_turn
+                return msg
+
+            # ÖNEMLİ: Diğer hatalar için normal hatayı yukarı fırlat
             self.chat_history.pop()
-            # KRİTİK: Sınıflandırma başarılı olup state ilerlemiş olabilir ama asıl
-            # yanıt üretimi burada başarısız oldu — bu "hayalet" ilerlemeyi geri al.
-            # Aksi halde aday hatayı görüp aynı mesajı tekrar gönderdiğinde, state bu
-            # kez GERÇEKTEN ilerler ve aday bir aşamayı (örn. BACKGROUND) hiç
-            # yaşamadan atlamış olur.
             if self.current_state != state_before_turn:
                 self._entered_states.discard(self.current_state)
                 self.current_state = state_before_turn
@@ -556,7 +642,11 @@ class InterviewOrchestrator:
         # 2. İlk başlatma kontrolü — karşılama sabit/adaydan bağımsız olduğu için
         # LLM çağrısı yapmadan, hazır varyasyonlardan biri rastgele seçilir.
         if not self.chat_history and (not user_text or user_text.lower() in ["/start", "start"]):
-            greeting = random.choice(self._WELCOME_GREETINGS)
+            # Deterministic welcome stream: greet, explain purpose, ask readiness
+            greeting = (
+                "Merhaba. Bugün kısa bir teknik mülakat yapacağız; sana birkaç kısa soru soracağım "
+                "ve cevaplarını değerlendireceğim. Hazır mısın?"
+            )
             self.chat_history.append(AIMessage(content=greeting))
             yield greeting
             return
@@ -683,17 +773,59 @@ class InterviewOrchestrator:
             cleaned_response = self._clean_response_for_tts(full_response)
             self.chat_history.append(AIMessage(content=cleaned_response))
         except Exception as e:
-            # ÖNEMLİ: Hata metnini (API hata kodu, rate limit detayı vb.) asla normal
-            # bir model yanıtı gibi yield ETME — aksi halde bu metin TTS'e gidip
-            # adaya sesli okunur. Bunun yerine son (bozuk) mesajı geçmişten çıkarıp
-            # hatayı yukarı fırlat; çağıran (main.py) bunu ayrı bir 'error' WS
-            # olayıyla ele alır, konuşma akışına asla karışmaz.
+            err_text = str(e).lower()
+            if any(k in err_text for k in ("resource_exhausted", "quota", "429")):
+                logger.error(f"[Orchestrator] Streaming LLM quota hatası: {e}")
+                # Try fallback to Groq if available
+                api_key = os.getenv("GROQ_API_KEY")
+                if api_key and self.provider != 'groq':
+                    logger.info("[Orchestrator] Attempting streaming fallback to Groq due to quota/error")
+                    try:
+                        self.provider = 'groq'
+                        self.model = ChatGroq(
+                            model=self.default_model_name,
+                            temperature=self.temperature,
+                            groq_api_key=api_key,
+                            reasoning_format="hidden",
+                            reasoning_effort="none",
+                            max_tokens=4096
+                        )
+                        # Stream from new model
+                        full_response = ""
+                        buffer = ""
+                        async for chunk in self.model.astream(messages):
+                            token = self._extract_text(chunk.content)
+                            full_response += token
+                            buffer += token
+                            ready, buffer = self._split_ready_text(buffer)
+                            if ready:
+                                cleaned_chunk = self._clean_response_for_tts(ready)
+                                if cleaned_chunk:
+                                    trailing_ws = re.search(r'\s+$', ready)
+                                    yield cleaned_chunk + (trailing_ws.group(0) if trailing_ws else "")
+
+                        if buffer.strip():
+                            cleaned_chunk = self._clean_response_for_tts(buffer)
+                            if cleaned_chunk:
+                                yield cleaned_chunk
+
+                        cleaned_response = self._clean_response_for_tts(full_response)
+                        self.chat_history.append(AIMessage(content=cleaned_response))
+                        return
+                    except Exception as e2:
+                        logger.error(f"[Orchestrator] Streaming fallback to Groq failed: {e2}")
+
+                # If fallback not possible or failed, yield friendly message
+                if self.chat_history and isinstance(self.chat_history[-1], AIMessage):
+                    self.chat_history.pop()
+                if self.current_state != state_before_turn:
+                    self._entered_states.discard(self.current_state)
+                    self.current_state = state_before_turn
+                yield "Üzgünüm, şu an LLM kotası aşıldı veya model kullanılamıyor. Birkaç dakika sonra tekrar deneyin veya metin ile devam edin."
+                return
+
+            # Diğer hatalarda önceki davranışı koru: geçmişi temizle ve hatayı fırlat
             self.chat_history.pop()
-            # KRİTİK: Sınıflandırma başarılı olup state ilerlemiş olabilir ama asıl
-            # yanıt üretimi (streaming) burada başarısız oldu — bu "hayalet"
-            # ilerlemeyi geri al. Aksi halde aday hatayı görüp aynı mesajı tekrar
-            # gönderdiğinde, state bu kez GERÇEKTEN ilerler ve aday bir aşamayı
-            # (örn. BACKGROUND) hiç yaşamadan atlamış olur.
             if self.current_state != state_before_turn:
                 self._entered_states.discard(self.current_state)
                 self.current_state = state_before_turn
