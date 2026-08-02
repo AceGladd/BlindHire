@@ -179,12 +179,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
 
     const transporter = nodemailer.createTransport({
-      service: "gmail",
+      host: "smtp.gmail.com",
+      port: 587,
+      secure: false, // 587 portu için false (STARTTLS) kullanılır
       auth: {
         user: userEmail,
         pass: userPass,
       },
-    });
+      family: 4, // Render'ın IPv6 kısıtlamasını aşarak IPv4 üzerinden bağlanmasını sağlar
+    } as any);
 
     const mailOptions: any = {
       from: `"BlindHire Kariyer" <${userEmail}>`,
