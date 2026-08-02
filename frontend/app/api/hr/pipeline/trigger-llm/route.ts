@@ -200,16 +200,49 @@ export async function POST(request: NextRequest) {
     // 4. Call Groq
     const aiResult = await groqDeepAnalysis(cvText, reqs, application.jobPosting.title, application.jobPosting.description);
 
-    // 5. Update Application
+    // 5. Fetch Stage 2 thresholds from company settings
+    let companySettings: any = null;
+    try {
+      if ((prisma as any).companySettings && (prisma as any).companySettings.findUnique) {
+        companySettings = await (prisma as any).companySettings.findUnique({ where: { companyId: application.jobPosting.companyId } });
+      } else if ((prisma as any).hRSettings && (prisma as any).hRSettings.findUnique) {
+        companySettings = await (prisma as any).hRSettings.findUnique({ where: { companyId: application.jobPosting.companyId } });
+      }
+    } catch (e) {
+      console.error('Error fetching company settings:', e);
+    }
+
+    const s2Reject = companySettings?.stage2AutoRejectThreshold ?? 60;
+    const s2Invite = companySettings?.stage2AutoInviteThreshold ?? 75;
+
+    // 6. Decide status based on LLM score vs thresholds
+    let newStatus: string;
+    let decisionMessage: string;
+
+    if (aiResult.finalScore < s2Reject) {
+      // Score below reject threshold → auto reject
+      newStatus = "REJECTED";
+      decisionMessage = `LLM puanı (${aiResult.finalScore}) ret barajının (${s2Reject}) altında. Otomatik reddedildi.`;
+    } else if (aiResult.finalScore >= s2Invite) {
+      // Score above invite threshold → auto invite to interview
+      newStatus = "INTERVIEW_INVITED";
+      decisionMessage = `LLM puanı (${aiResult.finalScore}) davet barajının (${s2Invite}) üstünde. Mülakata davet edildi.`;
+    } else {
+      // Score between thresholds → manual IK review
+      newStatus = "LLM_REVIEW";
+      decisionMessage = `LLM puanı (${aiResult.finalScore}) İK inceleme aralığında (${s2Reject}-${s2Invite}). Manuel incelemeye alındı.`;
+    }
+
+    // 7. Update Application
     await prisma.application.updateMany({
       where: { id: applicationId },
       data: {
         reliability: aiResult.finalScore,
-        status: "LLM_REVIEW" // Move to Stage 2
+        status: newStatus
       }
     });
 
-    return NextResponse.json({ success: true, message: "LLM analizi tamamlandı." });
+    return NextResponse.json({ success: true, message: decisionMessage, score: aiResult.finalScore, status: newStatus });
   } catch (error: any) {
     console.error("Trigger LLM Error:", error);
     return NextResponse.json({ message: error.message || "Sunucu hatası." }, { status: 500 });

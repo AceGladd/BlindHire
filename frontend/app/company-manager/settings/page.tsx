@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { Users, Plus, Loader2, Trash2, Mail, User, Key, CheckCircle2, AlertTriangle, Shield, Settings, Save } from "lucide-react";
+import { Users, Plus, Loader2, Trash2, Mail, User, Key, CheckCircle2, AlertTriangle, Shield, Settings, Save, Brain } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 interface DualSliderProps {
@@ -345,8 +345,8 @@ export default function SettingsPage() {
 
               <div className="rounded-xl border border-white/[0.04] bg-[#0a0a0a] p-6">
                 <DualRangeSlider 
-                  label="Aşama 2: AI Yüz Yüze Görüşme" description="AI video mülakat aksiyonları."
-                  icon={<User className="w-5 h-5 text-theme-1" />} min={0} max={100}
+                  label="Aşama 2: CV LLM Derin Analizi" description="Yapay zeka CV analiz puanı aksiyonları."
+                  icon={<Brain className="w-5 h-5 text-theme-1" />} min={0} max={100}
                   val1={s2Reject} val2={s2Invite} onChange={(v1, v2) => { setS2Reject(v1); setS2Invite(v2); }}
                   leftLabel="Otomatik Ret" middleLabel="İK İncelemesi" rightLabel="Mülakata Davet"
                   leftColor="bg-red-500" middleColor="bg-yellow-500" rightColor="bg-blue-500"
