@@ -59,6 +59,11 @@ Sistem varsayılan olarak `http://localhost:3000` adresinde ayağa kalkacaktır.
 - Uzaktan yazılımcı işe alan startup ve orta ölçekli şirketler
 - Çok uluslu teknoloji ve kurumsal şirketler
 
+## Trello Sprint Board Linki
+
+
+🔗 ** https://trello.com/invite/b/6a4a360d11b889f0fa073d57/ATTIedbe914938e656d9613d0f8f7e6db0fcD77147FC/yzvb-bootcamp  **
+
 ---
 
 ## Sprint 1
@@ -191,4 +196,74 @@ Sprint 2 boyunca iletişim kanalları en yüksek verimlilikte kullanılmış, op
 * **Aksiyon Planı (Sprint 3 Hedefleri):**
   * **Yerel Optimizasyon ve Refactoring:** Birden fazla ağır modelin (Göz takibi, RAG motoru ve ses API'leri) yerel makinede (local environment) çalışırken yarattığı tarayıcı yükünü hafifletmek adına performans ve bellek optimizasyonlarını gerçekleştirmek.
   * **Yapay Zeka Çeşitliliği (DEI):** Mülakat değerlendirmelerinde yapay zekanın tarafsızlığını (bias check) ölçen algoritmaları devreye almak.
-  * **Kullanıcı Testleri:** Yerelde hazırlanan bu kararlı ve bütünleşik yapıyı gerçek beta kullanıcılarıyla test ederek platformun ilk gerçek mülakat deneyimi raporlarını toplamak.
+
+
+ ## Sprint 3 (Final Sprint)
+
+### 1. Backlog Düzeni ve Story Seçimleri (Sprint Backlog)
+
+Sprint 3 (Final Sprint) planlama toplantısında, BlindHire platformunun tüm modüllerinin (LLM/RAG, Computer Vision, Ses ve Frontend) uçtan uca entegre edilmesi, sistem kararlılığının artırılması, halüsinasyon ve bug fix (hata giderme) süreçlerinin tamamlanması ve platformun nihai sunuma eksiksiz hazırlanması hedeflenmiştir. Trello üzerinde şu iş kalemleri önceliklendirilmiştir:
+
+* **Story 1 (Epic: Computer Vision / Model Entegrasyonu & Hata İyileştirme):** Bir yapay zeka geliştiricisi olarak, göz ve odağı takip eden bilgisayarlı görü modelinin frontend ve backend ile olan son entegrasyon kanallarını tamamlamak, test aşamasında tespit edilen görüntü işleme bug'larını gidermek ve model kararlılığını en üst seviyeye çıkarmak istiyorum. (Status: Done | Developer: Utku)
+* **Story 2 (Epic: Conversational AI / Halüsinasyon Önleme & Bug Fixing):** Bir yapay zeka geliştiricisi olarak, RAG mimarisi üzerinden çalışan LLM ajanının kenar durumlarda (edge cases) ürettiği halüsinasyonları ve mantıksal hataları gidermek, prompt sınırlandırmalarını sıkılaştırmak ve mülakat diyalog akışındaki AI bug'larını tamamen temizlemek istiyorum. (Status: Done | Developer: Melih)
+* **Story 3 (Epic: Ses & Entegrasyon / Uçtan Uca Test & Sistem Kararlılığı):** Bir sistem mimarı ve entegratör olarak, ses, metin ve görüntü işleme modüllerinin bir arada çalıştığı bütünleşik mimariyi kapsamlı stres ve entegrasyon testlerine tabi tutmak, ses iletimi ve yanıt gecikmelerindeki (latency) entegrasyon bug'larını çözmek istiyorum. (Status: Done | Developer/Product Owner: Şafak)
+* **Story 4 (Epic: Web UI / Model Bağlantıları, Performans Optimizasyonu & Test):** Bir frontend geliştiricisi olarak, arayüz bileşenlerini canlı çalışan yapay zeka ve görüntü işleme modellerine bağlamak, tarayıcı üzerindeki işlem yükünü hafifletecek performans ve bellek optimizasyonlarını gerçekleştirmek ve uçtan uca kullanıcı kabul testlerini (UAT) yürütmek istiyorum. (Status: Done | Developer: Bedirhan)
+* **Story 5 (Epic: Süreç Liderliği, Final Kapanışı & Sunum Hazırlık Koordinasyonu):** Bir Scrum Master olarak, son sprintte ekibin test ve bug fix süreçlerindeki odaklanmasını korumak, modül entegrasyonlarında ortaya çıkan krizleri proaktif olarak çözmek, WhatsApp ve Slack kanallarındaki son kontrol akışını yönetmek ve projenin final jüri teslimi öncesinde tüm Agile sürecini eksiksiz şekilde kapatmak istiyorum. (Status: Done | Scrum Master: Simge)
+
+---
+
+### 2. Daily Scrum (Günlük Toplantı Özetleri)
+<img width="1917" height="877" alt="Ekran görüntüsü 2026-07-29 213929" src="https://github.com/user-attachments/assets/367a9cb1-86c4-4a1c-ba19-0d7cf08d0c80" />
+
+Final sprinti boyunca yoğun bir test ve bug fix maratonu yürütülmüş, anlık teknik krizler WhatsApp üzerinden çözülürken, resmi süreç takibi ve raporlamalar Slack üzerinden sürdürülmüştür. Kritik aşamalardaki teknik durum özetleri şu şekildedir:
+
+* **Bedirhan (Web UI & Entegrasyon):** Utku'nun görüntü işleme modelini ve Melih'in LLM motorunu frontend arayüzüne tamamen bağladı. Çoklu modellerin aynı anda çalışmasından kaynaklanan tarayıcı kasma/yavaşlama sorunlarını bellek optimizasyonuyla çözerek akıcı bir kullanıcı deneyimi sağladı. Uçtan uca testleri tamamladı.
+* **Utku (Görsel Analiz):** Görüntü işleme modelinin frontend ve backend ile iletişim kurduğu veri hatlarındaki entegrasyon bug'larını temizledi. Modelin adayın odağını anlık kaybetmesi durumunda oluşan yanlış alarm çıktılarını optimize ederek kararlı ve doğru veri üreten nihai görsel analiz modülünü teslim etti.
+* **Melih (LLM/AI & RAG Mimarisi):** Mülakat esnasında LLM ajanının RAG veri seti dışına çıkıp uydurma yanıtlar vermesine (halüsinasyon) yol açan prompt ve kural açıklarını kapattı. Mülakat senaryolarında karşılaşılan mantıksal hataları ve diyalog blokajlarını düzelterek tutarlı, profesyonel bir mülakat ajanı elde etti.
+* **Şafak (Ses & Entegrasyon):** Bütünleşik sistem üzerinde kapsamlı entegrasyon ve stres testleri yürüttü. Ses girdi/çıktıları ile LLM yanıtları arasında yaşanan anlık senkronizasyon kopmalarını ve ağ gecikmelerini çözerek sistemin uçtan uca donmadan ve kesintisiz çalışmasını garantiledi.
+* **Simge (Scrum Master):** Final sprintindeki yüksek temposunda takım içi motivasyonu ve iletişimi en üst düzeyde tuttu. Modellerin bağlanması esnasında Bedirhan, Utku ve Melih arasında yaşanan entegrasyon krizlerinde araya girerek blokajları (blockers) anında kaldırdı. WhatsApp/Slack çift kanallı koordinasyonuyla test süreçlerini ivmelendirdi ve BlindHire projesinin tüm Agile süreçlerini başarıyla tamamlayıp jüri teslimine eksiksiz hazırladı.
+
+---
+
+### 3. Sprint Board SS
+
+<img width="1919" height="877" alt="image" src="https://github.com/user-attachments/assets/2960e8c6-92a4-4d45-8721-45ff50621279" />
+
+
+---
+
+### 4. Ürün Durumu SS (Product Increment)
+
+<img width="1175" height="623" alt="image" src="https://github.com/user-attachments/assets/1dd2cf88-7e58-45af-be6e-64cbf0eb8ad8" />
+
+<img width="1160" height="603" alt="image" src="https://github.com/user-attachments/assets/24e551be-6ab1-48c9-b2f1-7cb3053d1a0f" />
+
+<img width="1167" height="602" alt="image" src="https://github.com/user-attachments/assets/5dd879c7-4cd8-4ff5-8acb-d1ae25cc1e0e" />
+
+<img width="1172" height="595" alt="image" src="https://github.com/user-attachments/assets/dcb5831c-e0d1-451d-8765-1ef5e6341120" />
+
+<img width="1152" height="606" alt="image" src="https://github.com/user-attachments/assets/e2d5bb65-3547-4462-bc5f-c8d53f6e75b4" />
+
+<img width="1168" height="601" alt="image" src="https://github.com/user-attachments/assets/e06a1254-1da7-41ec-88ce-09c556ee0bb1" />
+
+<img width="1167" height="596" alt="image" src="https://github.com/user-attachments/assets/f97aaa66-e148-4fec-b1b1-9219e73e9043" />
+
+---
+
+### 5. Sprint Review (Sprint Değerlendirmesi)
+
+* **Ne Hedeflendi?** Final sprintindeki temel hedefimiz; geliştirilen tüm modülleri (RAG LLM, Görüntü İşleme, Ses, Frontend) birbirine bağlamak, halüsinasyonları ve bug'ları temizlemek, tarayıcı performansını optimize etmek ve uçtan uca sorunsuz çalışan bir yayın sürümü elde etmekti.
+* **Ne Elde Edildi?** Proje hedeflerinin %100'üne ulaşıldı! BlindHire; otonom sesli/görsel analiz yapabilen, RAG mimarisiyle halüsinasyonsuz mülakat yürüten, performans optimizasyonu yapılmış ve testleri tamamlanmış, üretime/sunuma hazır kararlı bir yapay zeka platformu olarak tamamlandı.
+
+---
+
+### 6. Sprint Retrospective (Sprint Özeleştirisi)
+
+* **Neleri İyi Yaptık?**
+  * Tüm ekibin ortak gayreti ve Scrum Master'ımızın kriz yönetimi sayesinde test ve bug fix sürecini çok hızlı yönettik.
+  * Bağımsız modüllerin birleştirilmesi aşamasında yaşanan performans ve uyum sorunlarını ertelemeden anında çözdük.
+  * Başlangıçta belirlediğimiz MVP vizyonunun ötesine geçerek RAG, Lip-Sync, Göz Takibi ve Otomatik Skorlama içeren tam teşekküllü bir B2B SaaS ürünü ortaya çıkardık.
+* **Neleri Geliştirmeliyiz?**
+  * Gelecek versiyonlarda (Post-MVP), test otomasyonu süreçlerini daha erken sprintlerde kurgulayarak manuel test yükünü azaltabiliriz.
+* **Aksiyon Planı (Gelecek & Yaygınlaştırma Visyonu):**
+  * Proje jüriye sunularak bootcamp süreci başarıyla tamamlanacak.
