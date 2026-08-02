@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import nodemailer from "nodemailer";
 import { PALETTES } from "@/lib/theme";
 import sharp from "sharp";
+import dns from "dns";
+
+dns.setDefaultResultOrder('ipv4first');
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
