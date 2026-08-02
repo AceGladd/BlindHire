@@ -265,5 +265,5 @@ Final sprinti boyunca yoğun bir test ve bug fix maratonu yürütülmüş, anlı
   * Başlangıçta belirlediğimiz MVP vizyonunun ötesine geçerek RAG, Lip-Sync, Göz Takibi ve Otomatik Skorlama içeren tam teşekküllü bir B2B SaaS ürünü ortaya çıkardık.
 * **Neleri Geliştirmeliyiz?**
   * Gelecek versiyonlarda (Post-MVP), test otomasyonu süreçlerini daha erken sprintlerde kurgulayarak manuel test yükünü azaltabiliriz.
-* **Aksiyon Planı (Gelecek & Yaygınlaştırma Visyonu):**
+* **Aksiyon Planı (Gelecek & Yaygınlaştırma Vizyonu):**
   * Proje jüriye sunularak bootcamp süreci başarıyla tamamlanacak.
