@@ -495,8 +495,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
 
     if (status === "INTERVIEW_INVITED") {
-      const baseUrl =
-        process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+     const baseUrl =
+        process.env.NEXT_PUBLIC_APP_URL || "https://blindhire-pcym.onrender.com";
       finalInterviewId = Math.random().toString(36).substring(2, 10);
       finalInterviewPassword = Math.random()
         .toString(36)
